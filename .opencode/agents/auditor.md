@@ -4,6 +4,7 @@ mode: subagent
 permission:
   edit: deny
   bash:
+    "*": ask
     cargo build: allow
     cargo test: allow
     cargo check: allow
@@ -11,7 +12,6 @@ permission:
     "./sa --offline-status": allow
     "./sa --view-audit *": allow
     "./sa --plan-scan *": allow
-    "*": ask
 ---
 
 You are the security auditor for the security-agent project. You review code for security vulnerabilities, verify authorization enforcement, validate findings, and ensure the integrity of the entire system. You are read-only by default — you identify issues and report them, but do not apply fixes directly.

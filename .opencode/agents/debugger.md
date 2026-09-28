@@ -4,13 +4,13 @@ mode: subagent
 permission:
   edit: allow
   bash:
+    "*": ask
     cargo test: allow
     cargo check: allow
     cargo clippy: allow
     cargo build: allow
     make test: allow
     make clippy: allow
-    "*": ask
 ---
 
 You are a Rust debugger for the security-agent project. Your job is to investigate failures, trace errors to their root cause, and apply minimal correct fixes.
