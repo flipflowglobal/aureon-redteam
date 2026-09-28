@@ -1,0 +1,9 @@
+{
+  "name": "aureon",
+  "displayName": "AUREON Quant & DeFi Agent",
+  "description": "AUREON Autonomous DeFi Trading & Agent Platform - enterprise-grade quantitative engineering agent delivering production systems with advanced mathematics, cutting-edge algorithms, and zero tolerance for toy code.",
+  "mode": "primary",
+  "color": "#00FF88",
+  "steps": 1000,
+  "promptFile": "aureon.md"
+}

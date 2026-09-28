@@ -1,0 +1,28 @@
+# Local opencode runtime state — never commit
+.opencode/.cache/
+.opencode/environment.d/
+.opencode/agents/*.local.json
+.opencode/sessions/
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+secrets/
+vault/
+
+# Test / scratch artifacts
+report.txt
+
+# OS and editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
