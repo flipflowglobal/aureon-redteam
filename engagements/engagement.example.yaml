@@ -1,0 +1,89 @@
+# -----------------------------------------------------------------------------
+# Engagement authorization record — TEMPLATE ONLY.
+#
+# This file authorizes NOTHING. It is a schema example populated with
+# documentation-only values (RFC 5737 test ranges, example.com).
+#
+# Validation rules the policy layer MUST enforce:
+#   - reject wildcard/broad targets (0.0.0.0/0, ::/0, *.tld, "all networks")
+#   - require both internal approval and owner authorization
+#   - require valid_from / valid_until; expired records are inert
+#   - restrict network access to the explicit `targets` list
+#   - keep forbidden test classes denied and non-overridable
+#   - invalidate the record on any scope change (recompute record_sha256)
+# -----------------------------------------------------------------------------
+
+schema: 1
+engagement_id: ENG-2026-001
+title: Example authorized engagement
+status: draft                 # draft | approved | active | closed | revoked
+
+requested_by:
+  name: "Jane Tester"
+  organization: "Example Security Ltd"
+  contact: "jane.tester@example.com"
+
+# Internal sign-off. Does NOT replace owner authorization.
+approvals:
+  internal:
+    approver: "DarcelKing"
+    approved: false
+    approved_at: null          # ISO 8601 UTC
+    reference: null            # ticket / approval email ID
+  owner:                       # written authorization from the target's owner
+    owner_entity: "Example Target Corp"
+    owner_contact: "security@target.example.com"
+    document_reference: null   # e.g. SOW-2026-014 / RoE signed 2026-01-05
+    document_sha256: null      # hash of the stored signed document
+    approved: false
+    approved_at: null
+
+# Explicit targets only. No wildcards, no unspecified ranges.
+targets:
+  - type: cidr
+    value: "203.0.113.0/28"    # TEST-NET-3 (RFC 5737) — replace per engagement
+    description: "Public web tier"
+  - type: domain
+    value: "app.example.com"   # reserved example domain — replace per engagement
+    description: "Web application"
+  # - type: ssid
+  #   value: "example-corp"
+  #   bssid: "02:00:5e:10:00:01"
+  #   description: "Client Wi-Fi, only if owner authorizes wireless testing"
+
+excluded_targets:              # always treated as out of scope
+  - type: cidr
+    value: "203.0.113.8/30"    # e.g. third-party kiosk network inside range
+    description: "Vendor-managed segment — excluded by owner"
+
+allowed_tests:                 # narrow allowlist
+  - service_discovery
+  - web_vulnerability_scan
+  - credentialed_configuration_review
+
+forbidden_tests:               # defaults; a record cannot enable these
+  - denial_of_service
+  - social_engineering
+  - data_exfiltration
+  - persistence
+
+network_access:
+  enabled: true
+  allowed_targets_only: true   # must always be true
+  protocols: [tcp, udp]
+  rate_limits:
+    max_requests_per_second: 5
+    max_concurrent_connections: 10
+
+time_window:
+  valid_from: "2026-01-12T00:00:00Z"
+  valid_until: "2026-01-13T00:00:00Z"
+
+stop_conditions:
+  emergency_contact: "ops@example.com"
+  halt_on: [owner_request, critical_finding, service_degradation]
+
+audit:
+  record_sha256: null          # computed and sealed when status becomes approved
+  created_at: "2026-01-01T00:00:00Z"
+  updated_at: "2026-01-01T00:00:00Z"

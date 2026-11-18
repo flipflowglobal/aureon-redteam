@@ -1,0 +1,13 @@
+{
+  "name": "aureon-redteam",
+  "version": "1.0.0",
+  "displayName": "AUREON + Red Team Agent Suite",
+  "description": "Enterprise-grade autonomous DeFi quantitative engineering and offensive security testing agent suite with zero tolerance for toy code.",
+  "author": "flipflowglobal",
+  "homepage": "https://github.com/flipflowglobal/aureon-redteam",
+  "suggestedPrompts": [
+    "Run an authorized offensive security audit against the local testbed",
+    "Develop an enterprise execution algorithm with Cornish-Fisher VaR risk limits",
+    "Perform a zero-toy-code security and integrity audit on this repository"
+  ]
+}

@@ -1,81 +1,86 @@
-# AUREON + Red Team — opencode agent library
+# AUREON + Red Team Agent Suite
 
-Opencode agent definitions for a set of specialized engineering agents
-maintained by the flipflowglobal org:
+Enterprise-grade quantitative engineering and offensive security testing agent library maintained by the flipflowglobal organization, configured for both **Antigravity (AGY)** and **OpenCode**.
 
-- **AUREON** — autonomous DeFi trading & quantitative engineering agent
-  (`.opencode/agents/aureon.{json,md}`)
-- **Red Team** — offensive security testing agent: recon, web exploitation,
-  credential attacks, wireless analysis, payload generation, reverse-shell
-  listening, cloud misconfiguration, and supply-chain auditing
-  (`.opencode/agents/redteam.{json,md}`)
-- **Auditor** — security audit and code review agent with a deny-by-default,
-  edit-limited permission surface (`.opencode/agents/auditor.md`)
-- **Coder** — production-grade Rust implementation and refactoring agent
-  (`.opencode/agents/coder.md`)
-- **Debugger** — failure triage, compile-error tracing, and test-regression
-  diagnosis agent (`.opencode/agents/debugger.md`)
-- **Deep Dive** — root-cause investigation agent for attack-path modeling,
-  belief propagation, and language-model diagnostics
-  (`.opencode/agents/deepdive.md`)
+All deliverables generated with these agent configurations are strictly governed by the **Enterprise Engineering Guidelines & Zero-Toy-Code Standard**: full codebase implementations, exhaustive error handling, strict type safety, real working actions, and zero tolerance for stubs, placeholders, or fake examples.
 
-## How opencode loads these agents
+---
 
-The canonical auto-discovered form is a **Markdown file with YAML frontmatter**
-(`description`, `mode`, `permission`, ...). The file name becomes the agent
-name (`aureon.md` ⇒ agent `aureon`). opencode discovers them in two scopes:
+## Agent Roster
 
-| Scope | Directory | When it applies |
-|-------|-----------|-----------------|
-| Project | `.opencode/agents/` | Always, as long as you run opencode in this repo |
-| Global  | `~/.config/opencode/agents/` | Every repo, user-wide |
+| Agent | Scope | Focus & Enterprise Mission |
+|---|---|---|
+| **AUREON** (`aureon`) | Primary / Subagent | Autonomous DeFi trading & quantitative engineering platform: stochastic calculus, Almgren-Chriss optimal execution, Cornish-Fisher VaR, and zero-toy-code production systems. |
+| **Red Team** (`redteam`) | Primary / Subagent | Offensive security testing with authorization gating: recon, web exploitation, credential attacks, wireless analysis, payload generation, reverse shell listening, cloud misconfiguration, and supply-chain auditing with real working actions. |
+| **Auditor** (`auditor`) | Primary / Subagent | Security audit and code review agent: policy enforcement verification, authorization-gate auditing, findings validation, append-only ledger integrity, and zero-toy-code compliance checking. |
+| **Coder** (`coder`) | Primary / Subagent | Production-grade feature implementation and refactoring (Rust 2024, Python strict typing, systems code) following the file-by-file iterative quality loop. |
+| **Debugger** (`debugger`) | Primary / Subagent | Defect triage, compiler-error tracing, test-regression repair, and runtime panic diagnosis with zero temporary stubs or hack bypasses. |
+| **Deep Dive** (`deepdive`) | Primary / Subagent | Root-cause investigation, cognitive reasoning pipelines, belief propagation across attack graphs, and neural language model perplexity diagnostics. |
 
-The `.json` files in this repo are **metadata companions** (mode/color/steps and
-a `promptFile` reference) — opencode itself discovers agents from the `.md`
-files. Nothing beyond the `.md` files is required to use the agents.
+---
 
-Config is read once at startup: **quit and restart opencode** after installing.
+## Antigravity (AGY) Integration
 
-## Quick start
+Antigravity natively discovers agents and rules in two scopes:
 
-Clone the repo and the agents work immediately at project scope:
+1. **Workspace Scope (`.agents/` and `AGENTS.md`)**:
+   - Agent definitions: `.agents/agents/*.md`
+   - Workspace rules: `AGENTS.md` and `.agents/rules/AGENTS.md` (automatically applied by AGY across this directory and subdirectories)
+   - Procedures and runbooks: `.agents/skills/`
+2. **Global Plugin Scope (`~/.gemini/config/plugins/aureon-redteam`)**:
+   - The entire suite is packaged as a standard Antigravity plugin in `plugins/aureon-redteam/`.
+   - Installable globally across all repositories using `agy plugin install` or `./setup.sh agy-install`.
+
+### AGY Quick Start
 
 ```sh
-git clone https://github.com/flipflowglobal/aureon-redteam
-cd aureon-redteam
-opencode          # Tab → aureon, or @mention any subagent below
+# Verify AGY plugin integrity and zero-toy-code compliance
+./setup.sh agy-validate
+
+# Install AGY plugin globally
+./setup.sh agy-install
+
+# List available AGY agents
+agy agents
+
+# Launch an interactive or command session with a specific agent
+agy --agent aureon
+agy --agent redteam
+agy --agent coder
+agy --agent auditor
+agy --agent debugger
+agy --agent deepdive
 ```
 
-To make the whole library available **in every repo** (recommended when you use
-these agents with other checkouts), use `setup.sh`:
+---
+
+## OpenCode Integration
+
+OpenCode discovers agents via `.opencode/agents/*.md` at project scope and in `~/.config/opencode/agents/` at global scope:
 
 ```sh
-./setup.sh install       # sync agents into ~/.config/opencode/agents/
-./setup.sh open          # install (if needed), then launch opencode
-./setup.sh status        # compare global copies against this repo
-./setup.sh uninstall     # remove global copies that exactly match this repo
+# Sync agents into ~/.config/opencode/agents/
+./setup.sh install
+
+# Launch opencode
+./setup.sh open
+
+# Compare global copies against this repo
+./setup.sh status
 ```
 
-`install` never silently destroys existing files: if a same-named global file
-differs, it is first backed up to `~/.config/opencode/agents/.setup-backup/`.
-Pass `--force` to skip back-ups. Respect `OPENCODE_CONFIG_DIR` (or
-`XDG_CONFIG_HOME`) to target a non-default config dir.
+To install both AGY and OpenCode configurations globally in one command:
+```sh
+./setup.sh all
+```
 
-## Agents
+---
 
-| File | Mode | Purpose |
-|------|------|---------|
-| `aureon.md` | primary | Autonomous DeFi trading & quantitative engineering platform |
-| `redteam.md` | primary | Offensive security testing with authorization gating |
-| `auditor.md` | subagent | Security audit/review — deny-by-default, edit-limited |
-| `coder.md` | subagent | Feature implementation and refactoring (Rust-first) |
-| `debugger.md` | subagent | Failure triage, compile-error tracing, regressions |
-| `deepdive.md` | subagent | Root-cause investigation and model diagnostics |
-| `aureon.json` | — | Metadata companion (mode/color/steps, `promptFile`) |
-| `redteam.json` | — | Metadata companion (mode/color/steps, `promptFile`) |
+## Enterprise Zero-Toy-Code Standard
 
-The `.md` agents carry their own YAML frontmatter (`description`, `mode`,
-`permission`) and are referenced by filename.
+All agents operate under the mandatory rules defined in [AGENTS.md](file:///data/data/com.termux/files/home/aureon-redteam/AGENTS.md):
 
-Local per-install state (`environment.d`, session files, local agent JSON)
-is excluded via `.gitignore`.
+- **No Placeholders or Stubs**: Zero tolerance for `TODO`, `FIXME`, `pass`, `...`, `todo!()`, `unimplemented!()`, or truncated code blocks.
+- **No Mock / Toy Data**: Real schemas, typed interfaces, and production bindings only.
+- **Real Working Actions**: All tools and network commands must execute functional operations and process live data. Mock exploits or simulated command outputs are strictly prohibited.
+- **Full Codebase Completeness**: Every deliverable must be emitted in full, compile with zero warnings, pass all automated tests, and be immediately deployable.

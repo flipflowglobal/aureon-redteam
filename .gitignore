@@ -3,6 +3,7 @@
 .opencode/environment.d/
 .opencode/agents/*.local.json
 .opencode/sessions/
+.opencode/backups/
 
 # Environment and secrets
 .env

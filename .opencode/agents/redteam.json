@@ -1,7 +1,7 @@
 {
   "name": "redteam",
   "displayName": "Red Team Offensive Security Agent",
-  "description": "Offensive security testing agent — recon, web exploitation, credential attacks, wireless analysis, payload generation, reverse shell listening, cloud misconfiguration, and supply-chain auditing.",
+  "description": "Offensive security testing agent — recon, web exploitation, credential attacks, wireless analysis, payload generation, reverse shell listening, cloud misconfiguration, and supply-chain auditing; every finding must be evidence-backed, with no fabricated or simulated results.",
   "mode": "primary",
   "promptFile": "redteam.md"
 }
