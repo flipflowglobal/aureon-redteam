@@ -129,6 +129,70 @@ def main() -> int:
             _write_active_record(os.path.join(root, "engagements", "r.yaml"), **kwargs)
             expect("nmap -sV 198.18.0.10", root, "deny", label)
 
+    # --- local_network scope mode (operator-owned LAN) ---
+    def _write_local_record(path: str, *, approved: bool = True) -> None:
+        now = _dt.datetime.now(_dt.timezone.utc)
+        start = (now - _dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        end = (now + _dt.timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        a = "true" if approved else "false"
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(
+                "schema: 1\n"
+                "engagement_id: ENG-LAN\n"
+                "status: active\n"
+                "scope_mode: local_network\n"
+                "approvals:\n"
+                "  internal:\n"
+                f"    approved: {a}\n"
+                "  owner:\n"
+                f"    approved: {a}\n"
+                "targets: []\n"
+                "excluded_targets:\n"
+                "  - type: ip\n"
+                '    value: "192.168.50.1"\n'
+                "network_access:\n"
+                "  enabled: true\n"
+                "  allowed_targets_only: true\n"
+                "  private_only: true\n"
+                "time_window:\n"
+                f'  valid_from: "{start}"\n'
+                f'  valid_until: "{end}"\n'
+            )
+
+    _prev = os.environ.get("AUREON_LOCAL_SUBNETS")
+    os.environ["AUREON_LOCAL_SUBNETS"] = "192.168.50.0/24"
+    try:
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "engagements"))
+            _write_local_record(os.path.join(root, "engagements", "lan.yaml"))
+            expect("nmap -sV 192.168.50.10", root, "allow", "local_network: same-subnet host allowed")
+            expect("nmap -sn 192.168.50.0/24", root, "allow", "local_network: same-subnet CIDR sweep allowed")
+            expect("hydra -l a -p b 192.168.50.20 ssh", root, "allow", "local_network: credential attack on LAN allowed")
+            expect("nmap 192.168.50.1", root, "deny", "local_network: excluded LAN device denied")
+            expect("nmap 192.168.99.5", root, "deny", "local_network: other private subnet denied")
+            expect("nmap 10.0.0.9", root, "deny", "local_network: different private range denied")
+            expect("nmap 8.8.8.8", root, "deny", "local_network: public target denied")
+            expect("curl https://example.org", root, "deny", "local_network: public egress denied")
+            expect("hping3 --flood 192.168.50.10", root, "deny", "local_network: DoS on LAN denied (non-overridable)")
+            expect("masscan 0.0.0.0/0", root, "deny", "local_network: blanket scope denied")
+
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "engagements"))
+            _write_local_record(os.path.join(root, "engagements", "lan.yaml"), approved=False)
+            expect("nmap 192.168.50.10", root, "deny", "local_network: unapproved record denies even on LAN")
+
+        # Subnet not detected / empty override -> record authorizes nothing.
+        os.environ["AUREON_LOCAL_SUBNETS"] = "203.0.113.0/24"  # non-private -> dropped
+        with tempfile.TemporaryDirectory() as root:
+            os.mkdir(os.path.join(root, "engagements"))
+            _write_local_record(os.path.join(root, "engagements", "lan.yaml"))
+            expect("nmap 192.168.50.10", root, "deny", "local_network: no private subnet detected -> deny (fail closed)")
+    finally:
+        if _prev is None:
+            os.environ.pop("AUREON_LOCAL_SUBNETS", None)
+        else:
+            os.environ["AUREON_LOCAL_SUBNETS"] = _prev
+
     # --- template file must never authorize ---
     with tempfile.TemporaryDirectory() as root:
         eng = os.path.join(root, "engagements")

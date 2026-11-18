@@ -123,8 +123,25 @@ It is **deny-by-default** and fails closed:
 - Denial-of-service tooling and blanket scope (`0.0.0.0/0`, `::/0`) are denied
   unconditionally and cannot be enabled by any record.
 
+#### Local-network scope mode
+
+A record with `scope_mode: local_network` (see
+[`engagements/local-network.yaml`](engagements/local-network.yaml)) grants
+full-scope testing of the **operator's own LAN** without enumerating each host.
+It is bounded so it can never become a blanket bypass: a target is authorized
+only when it is a **private** address/CIDR (RFC 1918 / CGNAT / link-local / IPv6
+ULA) **and** falls inside a subnet the host is directly attached to (the "same
+network"). Public/routable targets, other private subnets, excluded devices,
+DoS tooling, and blanket scope all remain denied. The host subnets are detected
+from the interface table and can be pinned with the `AUREON_LOCAL_SUBNETS`
+environment variable; if none are detected the record authorizes nothing
+(fail-closed). Setting `approvals.owner.approved: true` is your attestation that
+you own or are authorized to test every device on that segment — it does **not**
+authorize shared or public networks (café / hotel / office Wi-Fi) beyond devices
+you are entitled to test.
+
 ```sh
-python3 .claude/hooks/test_policy_wrap.py   # 21 behavioural tests for the wrap
+python3 .claude/hooks/test_policy_wrap.py   # 33 behavioural tests for the wrap
 ```
 
 ---

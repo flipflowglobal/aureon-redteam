@@ -1,0 +1,83 @@
+# -----------------------------------------------------------------------------
+# Engagement authorization record — OPERATOR-OWNED LOCAL NETWORK.
+#
+# Authorizes full-scope assessment of devices on the host's OWN local subnet(s)
+# only. The policy wrap (.claude/hooks/policy_wrap.py) enforces, in addition to
+# this record:
+#   * the target must be a PRIVATE address/CIDR (RFC 1918 / CGNAT / link-local /
+#     IPv6 ULA) — public, routable targets are never authorized here;
+#   * the target must fall inside a subnet the host is directly attached to
+#     (same network), detected from the interface table or AUREON_LOCAL_SUBNETS;
+#   * denial-of-service tooling and blanket scope (0.0.0.0/0, ::/0) stay denied.
+#
+# This is self-authorization for a network you own/control. By setting
+# approvals.owner.approved: true you attest ownership or written authorization
+# for every device on your local segment. It does NOT authorize shared or public
+# networks (café / hotel / office Wi-Fi) beyond devices you are entitled to test.
+# -----------------------------------------------------------------------------
+
+schema: 1
+engagement_id: ENG-LOCAL-LAN
+title: Operator-owned local network (same-subnet full scope)
+status: active                 # draft | approved | active | closed | revoked
+scope_mode: local_network      # same-subnet private targets, resolved at runtime
+
+requested_by:
+  name: "DarcelKing"
+  organization: "Self / home lab"
+  contact: "darcelking"
+
+approvals:
+  internal:
+    approver: "DarcelKing"
+    approved: true
+    approved_at: "2026-11-18T14:21:02Z"
+    reference: "self-authorized local lab"
+  owner:
+    owner_entity: "DarcelKing (self-owned local network)"
+    owner_contact: "darcelking"
+    document_reference: "operator attestation of local-network ownership"
+    document_sha256: null
+    approved: true
+    approved_at: "2026-11-18T14:21:02Z"
+
+# No static targets: scope is the host's own private subnet(s), resolved live.
+targets: []
+
+# Devices on the local segment you are NOT entitled to test (add as needed).
+excluded_targets: []
+
+allowed_tests:
+  - service_discovery
+  - web_vulnerability_scan
+  - credentialed_configuration_review
+  - credential_attack
+  - wireless_analysis
+
+forbidden_tests:               # defaults; a record cannot enable these
+  - denial_of_service
+  - social_engineering
+  - data_exfiltration
+  - persistence
+
+network_access:
+  enabled: true
+  allowed_targets_only: true   # restricted to the detected local subnet(s)
+  private_only: true           # routable/public targets remain denied
+  protocols: [tcp, udp]
+  rate_limits:
+    max_requests_per_second: 50
+    max_concurrent_connections: 50
+
+time_window:
+  valid_from: "2026-11-18T00:00:00Z"
+  valid_until: "2027-11-18T00:00:00Z"
+
+stop_conditions:
+  emergency_contact: "darcelking"
+  halt_on: [owner_request, service_degradation]
+
+audit:
+  record_sha256: null
+  created_at: "2026-11-18T14:21:02Z"
+  updated_at: "2026-11-18T14:21:02Z"

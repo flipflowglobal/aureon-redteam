@@ -33,6 +33,31 @@ The policy layer is **deny-by-default**: anything not explicitly listed in an
 7. **Rate limits and stop conditions apply**, including an emergency contact
    who can halt the engagement.
 
+## Scope modes
+
+A record's `scope_mode` selects how targets are resolved. The default is
+`explicit`.
+
+- **`explicit`** (default) — every host, CIDR, or domain is enumerated under
+  `targets`. Network access is restricted to that list, honouring
+  `excluded_targets`. This is the only mode that can authorize routable hosts,
+  and only those named.
+- **`local_network`** — authorizes the operator's **own local segment** without
+  enumerating each device. It is bounded by the policy wrap and cannot become a
+  blanket bypass: a target is authorized only when it is a **private**
+  address/CIDR (RFC 1918 / CGNAT / link-local / IPv6 ULA) **and** inside a subnet
+  the host is directly attached to. Public/routable targets, other private
+  subnets, `excluded_targets`, DoS classes, and blanket scope stay denied; if no
+  local subnet is detected the record authorizes nothing (fail-closed). Host
+  subnets are read from the interface table or pinned via `AUREON_LOCAL_SUBNETS`.
+  Setting `approvals.owner.approved: true` attests ownership of, or written
+  authorization for, every device on that segment — it never authorizes shared
+  or public networks beyond devices you are entitled to test. See
+  [`local-network.yaml`](local-network.yaml).
+
+This does not relax rule 1: there is still no `full_scope`, `all_networks`, or
+`bypass_approval` field, and `local_network` never reaches public address space.
+
 ## Record lifecycle
 
 ```

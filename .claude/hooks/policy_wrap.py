@@ -34,6 +34,8 @@ import json
 import os
 import re
 import shlex
+import socket
+import subprocess
 import sys
 from typing import Any
 
@@ -49,6 +51,19 @@ _LOCAL_NETS = [
 ]
 _LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
 _LOCAL_DOMAIN_SUFFIXES = (".example.com", ".example.net", ".example.org", ".localhost")
+
+# Private / non-routable address space. A ``local_network`` engagement may only
+# authorize targets inside these ranges AND inside one of the host's own
+# interface subnets — never public, routable addresses.
+_PRIVATE_NETS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("169.254.0.0/16"),  # link-local
+    ipaddress.ip_network("100.64.0.0/10"),  # CGNAT
+    ipaddress.ip_network("fc00::/7"),  # IPv6 ULA
+    ipaddress.ip_network("fe80::/10"),  # IPv6 link-local
+]
 
 # Offensive / active-network tooling that the policy gates.
 _OFFENSIVE_BINS = {
@@ -256,6 +271,11 @@ def _record_is_authorized(rec: dict) -> tuple[bool, str]:
     return True, "authorized"
 
 
+def _record_mode(rec: dict) -> str:
+    mode = str(rec.get("scope_mode") or rec.get("scope") or "explicit").strip().lower()
+    return "local_network" if mode in ("local_network", "local-network", "lan") else "explicit"
+
+
 def _target_in_record(target: str, rec: dict) -> bool:
     excluded = rec.get("excluded_targets") or []
     for ex in excluded:
@@ -303,6 +323,83 @@ def _is_local_target(target: str) -> bool:
         for net in _LOCAL_NETS:
             if tip.version == net.version and tip in net:
                 return True
+    return False
+
+
+def _is_private_net(net: ipaddress._BaseNetwork) -> bool:
+    for priv in _PRIVATE_NETS:
+        if net.version == priv.version and net.subnet_of(priv):
+            return True
+    return False
+
+
+def _local_subnets() -> list[ipaddress._BaseNetwork]:
+    """Return the private subnets the host is directly attached to.
+
+    Resolution order: an explicit ``AUREON_LOCAL_SUBNETS`` override (comma or
+    space separated CIDRs), then the kernel routing/interface table via ``ip``,
+    then a best-effort primary-IPv4 probe assuming a ``/24``. Only private,
+    non host-only subnets are returned; anything else is dropped so a
+    ``local_network`` record can never reach routable space. Detection failing
+    yields an empty list, i.e. the record authorizes nothing (fail closed).
+    """
+    override = os.environ.get("AUREON_LOCAL_SUBNETS")
+    if override:
+        nets: list[ipaddress._BaseNetwork] = []
+        for token in re.split(r"[,\s]+", override.strip()):
+            if not token:
+                continue
+            try:
+                nets.append(ipaddress.ip_network(token, strict=False))
+            except ValueError:
+                continue
+        return [n for n in nets if _is_private_net(n) and n.prefixlen < n.max_prefixlen]
+
+    nets = []
+    try:
+        proc = subprocess.run(
+            ["ip", "-o", "addr", "show"],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        out = proc.stdout
+    except (OSError, subprocess.SubprocessError):
+        out = ""
+    if out:
+        for line in out.splitlines():
+            m = re.search(r"\binet6?\s+([0-9A-Fa-f:.]+/\d+)", line)
+            if not m:
+                continue
+            try:
+                nets.append(ipaddress.ip_network(m.group(1), strict=False))
+            except ValueError:
+                continue
+
+    if not nets:
+        try:
+            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                probe.connect(("192.168.0.1", 9))  # no packets sent for UDP connect
+                host_ip = probe.getsockname()[0]
+            finally:
+                probe.close()
+            nets.append(ipaddress.ip_network(host_ip + "/24", strict=False))
+        except OSError:
+            pass
+
+    return [n for n in nets if _is_private_net(n) and n.prefixlen < n.max_prefixlen]
+
+
+def _target_in_local(target: str, subnets: list[ipaddress._BaseNetwork]) -> bool:
+    """True iff ``target`` is a private address/CIDR inside a host subnet."""
+    try:
+        tnet = ipaddress.ip_network(target, strict=False)
+    except ValueError:
+        return False  # hostnames are not provably same-subnet — deny in local mode
+    if not _is_private_net(tnet):
+        return False
+    for sn in subnets:
+        if tnet.version == sn.version and tnet.subnet_of(sn):
+            return True
     return False
 
 
@@ -444,13 +541,31 @@ def _decide(command: str, project_dir: str) -> tuple[str, str]:
     if not remote:
         return "allow", "Authorized engagement active; command has no explicit off-box target."
 
+    explicit_recs = [r for r in authorized if _record_mode(r) == "explicit"]
+    local_recs = [r for r in authorized if _record_mode(r) == "local_network"]
+    subnets = _local_subnets() if local_recs else []
+
     for tgt in remote:
-        if not any(_target_in_record(tgt, rec) for rec in authorized):
-            srcs = ", ".join(r.get("__source__", "?") for r in authorized)
-            return "deny", (
-                f"Out of scope: target '{tgt}' is not listed in any active engagement "
-                f"record ({srcs}). Add it to `targets` and re-approve, or exclude it."
-            )
+        by_explicit = any(_target_in_record(tgt, rec) for rec in explicit_recs)
+        # A local_network record never overrides an explicit exclusion.
+        excluded_anywhere = any(
+            isinstance(ex, dict) and _host_matches(tgt, str(ex.get("value", "")))
+            for rec in local_recs for ex in (rec.get("excluded_targets") or [])
+        )
+        by_local = bool(local_recs) and not excluded_anywhere and _target_in_local(tgt, subnets)
+        if by_explicit or by_local:
+            continue
+
+        srcs = ", ".join(r.get("__source__", "?") for r in authorized)
+        hint = (
+            " It is not on the host's local subnet"
+            + (f" ({', '.join(str(s) for s in subnets)})" if subnets else " (none detected)")
+            + "." if local_recs else ""
+        )
+        return "deny", (
+            f"Out of scope: target '{tgt}' is not authorized by any active engagement "
+            f"record ({srcs}).{hint} Add it to `targets` and re-approve, or exclude it."
+        )
 
     srcs = ", ".join(r.get("__source__", "?") for r in authorized)
     return "allow", f"Target(s) {', '.join(remote)} authorized by active engagement record(s): {srcs}."
