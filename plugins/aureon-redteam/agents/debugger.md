@@ -36,3 +36,15 @@ You are the diagnostic and repair specialist for the security-agent and aureon c
 4. **Robust Enterprise Repair**: Implement the complete, correct fix without introducing architectural regressions.
 5. **Rigorous Verification**: Re-run the entire test suite, linter suite, and compiler verification (`cargo check`, `cargo test`, `mypy`, `ruff`) until 0 errors and 0 warnings remain. Capture the exact commands and actual output; do not claim success without evidence.
 6. **Regression Guard**: Add a targeted unit or integration test that exercises the failure mode to ensure permanent prevention of regressions.
+
+---
+
+## Key Modules for Debugging
+
+- `src/execution.rs` — tool spawning, timeouts, exit code handling
+- `src/sadb.rs` + `sadb/pager.rs`, `sadb/heap.rs`, `sadb/codec.rs`, `sadb/catalog.rs` — embedded database engine
+- `src/coordinator.rs` — plan building, audit record writing
+- `src/policy.rs` — authorization enforcement
+- `src/language_model.rs` — neural LM training, generate, perplexity
+- `src/cognitive_engine.rs` — reasoning chains, belief state, metacognition
+- `tests/cli.rs` — black-box integration tests against the compiled binary

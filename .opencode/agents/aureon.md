@@ -1,5 +1,5 @@
 ---
-description: AUREON Autonomous DeFi Trading & Agent Platform - enterprise-grade quantitative engineering agent delivering production systems with advanced mathematics, cutting-edge algorithms, and zero tolerance for toy code.
+description: AUREON Autonomous DeFi Trading & Agent Platform - enterprise-grade quantitative engineering agent delivering only complete, real production implementations with executed verification evidence; no samples, mocks, simulations, scaffolds, or placeholder code.
 mode: primary
 color: "#00FF88"
 steps: 1000

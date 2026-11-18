@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+#
+# test_sync_prompts.sh - behavioural tests for tools/sync_prompts.sh.
+#
+# Each case builds a throwaway AGENTS_ROOT with synthetic test-only prompt
+# files, runs the real sync/check implementation against it, and asserts the
+# exit status and resulting file contents. No production tree is touched.
+
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SYNC="$ROOT/tools/sync_prompts.sh"
+[[ -x "$SYNC" ]] || chmod +x "$SYNC"
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+failures=0
+pass() { printf '  ok           %s\n' "$1"; }
+fail() { printf '  FAIL         %s\n' "$1" >&2; failures=$((failures + 1)); }
+
+seed() {
+  local root="$1"
+  mkdir -p "$root/.opencode/agents" "$root/.agents/agents" "$root/plugins/aureon-redteam/agents"
+  cat > "$root/.opencode/agents/probe.md" <<'PROMPT'
+---
+description: Probe agent for parity tests.
+mode: subagent
+---
+
+# Probe Agent
+
+Body line one.
+Body line two.
+PROMPT
+  cat > "$root/.agents/agents/probe.md" <<'PROMPT'
+---
+name: probe
+description: Probe agent for parity tests.
+mainAgent: true
+subagent: true
+tools: [read_file]
+---
+
+# Probe Agent
+
+Body line one.
+Body line two.
+PROMPT
+  cp "$root/.agents/agents/probe.md" "$root/plugins/aureon-redteam/agents/probe.md"
+}
+
+expect_pass() {
+  local root="$1" label="$2"
+  if AGENTS_ROOT="$root" "$SYNC" check >/dev/null 2>&1; then
+    pass "$label"
+  else
+    fail "$label (check exited non-zero)"
+  fi
+}
+
+expect_fail() {
+  local root="$1" label="$2"
+  if AGENTS_ROOT="$root" "$SYNC" check >/dev/null 2>&1; then
+    fail "$label (check exited zero)"
+  else
+    pass "$label"
+  fi
+}
+
+case_root="$work/case"
+seed "$case_root"
+expect_pass "$case_root" "synchronised tree passes"
+
+printf '\nBody line three.\n' >> "$case_root/plugins/aureon-redteam/agents/probe.md"
+expect_fail "$case_root" "plugin body drift is detected"
+AGENTS_ROOT="$case_root" "$SYNC" sync >/dev/null
+expect_pass "$case_root" "sync repairs plugin body drift"
+
+printf '\nBody line four.\n' >> "$case_root/.agents/agents/probe.md"
+expect_fail "$case_root" "AGY body drift is detected"
+AGENTS_ROOT="$case_root" "$SYNC" sync >/dev/null
+expect_pass "$case_root" "sync repairs AGY body drift"
+
+sed -i 's/^description: Probe agent for parity tests\.$/description: Diverged description./' "$case_root/.agents/agents/probe.md"
+expect_fail "$case_root" "description drift is detected"
+AGENTS_ROOT="$case_root" "$SYNC" sync >/dev/null
+expect_pass "$case_root" "sync aligns AGY description with OpenCode"
+
+seed "$work/missing"
+rm "$work/missing/.agents/agents/probe.md"
+expect_fail "$work/missing" "missing AGY agent is detected"
+
+if [[ "$failures" -ne 0 ]]; then
+  printf '\n%d test failure(s)\n' "$failures" >&2
+  exit 1
+fi
+printf '\nall sync_prompts tests passed\n'

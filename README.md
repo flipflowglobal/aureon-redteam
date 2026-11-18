@@ -76,6 +76,24 @@ To install both AGY and OpenCode configurations globally in one command:
 
 ---
 
+## Prompt Parity
+
+Every agent prompt body is identical across harnesses; only platform-specific frontmatter differs.
+
+- **Canonical body**: `.opencode/agents/*.md` (content after the frontmatter block).
+- **AGY frontmatter**: `.agents/agents/*.md` supplies `name`, `description`, `mainAgent`, `subagent`, and the `tools` allowlist.
+- **Mirror**: `plugins/aureon-redteam/agents/*.md` is byte-identical to `.agents/agents/`.
+
+```sh
+tools/sync_prompts.sh check   # exit non-zero on body, description, plugin, or roster drift
+tools/sync_prompts.sh sync    # rewrite AGY and plugin files from the OpenCode bodies
+tools/test_sync_prompts.sh    # behavioural tests for the parity tooling
+```
+
+`sync` preserves each AGY frontmatter block except `description`, which is aligned to the canonical OpenCode value. A new agent must exist in both `.opencode/agents/` and `.agents/agents/` before it can be synced; `check` reports a missing counterpart instead of inventing one.
+
+---
+
 ## Enterprise Zero-Toy-Code Standard
 
 All agents operate under the mandatory rules defined in [AGENTS.md](file:///data/data/com.termux/files/home/aureon-redteam/AGENTS.md):

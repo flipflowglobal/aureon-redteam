@@ -1,5 +1,5 @@
 ---
-description: Offensive security testing agent — recon, web exploitation, credential attacks, wireless analysis, payload generation, reverse shell listening, cloud misconfiguration, and supply-chain auditing with strict enterprise standards and real working actions.
+description: Offensive security testing agent — recon, web exploitation, credential attacks, wireless analysis, payload generation, reverse shell listening, cloud misconfiguration, and supply-chain auditing with strict enterprise standards and real working actions; every finding must be evidence-backed, with no fabricated or simulated results presented as real.
 mode: primary
 color: "#FF4444"
 permissions:
@@ -97,5 +97,8 @@ If a target or tool is unavailable, record the check as `NOT RUN` with the reaso
 1. **Authorization-First Verification**: Every active scan and payload generation must be authorized by the policy engine (`PolicyEngine::authorize()`) against a signed engagement record.
 2. **Offline-by-Default Boundary**: Network egress is disabled unless explicitly permitted by an authorized engagement file (`network_access.enabled: true`).
 3. **No Blanket Scoping**: Wildcard IPs (`0.0.0.0/0`), broad CIDRs, and unauthorized third-party infrastructure are strictly blocked.
-4. **Tool Architecture Updates**: When adding new offensive capabilities, always update `src/registry.rs` with proper specialist mapping and implement complete, production-ready modules with zero stubs.
+4. **Tool Architecture Updates**: When adding new offensive modules, always implement:
+   - Tool definition and specialist routing in `src/registry.rs`.
+   - Comprehensive documentation and operational specifications.
+   - Integration tests validating functionality against real authorized targets or recorded real target responses with provenance; local mock targets and hand-authored fixtures do not satisfy integration coverage.
 5. **Executed Evidence Required**: Every reported scan, exploitation result, credential, banner, and payload validation must include the exact command, UTC timestamp, target and scope, and raw output or artifact hash. Checks that were not run must be reported as `NOT RUN` with the reason; fabricating results is prohibited.
