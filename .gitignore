@@ -27,3 +27,6 @@ Thumbs.db
 *.swo
 .idea/
 .vscode/
+# Python bytecode cache (policy wrap hook)
+__pycache__/
+*.pyc

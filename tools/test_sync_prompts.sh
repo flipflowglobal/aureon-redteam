@@ -10,7 +10,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SYNC="$ROOT/tools/sync_prompts.sh"
-[[ -x "$SYNC" ]] || chmod +x "$SYNC"
+# Invoke the script through bash so the suite runs where `/usr/bin/env` is
+# absent (e.g. Termux), independent of the script's executable bit.
+BASH_BIN="${BASH:-bash}"
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -21,7 +23,8 @@ fail() { printf '  FAIL         %s\n' "$1" >&2; failures=$((failures + 1)); }
 
 seed() {
   local root="$1"
-  mkdir -p "$root/.opencode/agents" "$root/.agents/agents" "$root/plugins/aureon-redteam/agents"
+  mkdir -p "$root/.opencode/agents" "$root/.agents/agents" \
+           "$root/plugins/aureon-redteam/agents" "$root/.claude/agents"
   cat > "$root/.opencode/agents/probe.md" <<'PROMPT'
 ---
 description: Probe agent for parity tests.
@@ -48,11 +51,25 @@ Body line one.
 Body line two.
 PROMPT
   cp "$root/.agents/agents/probe.md" "$root/plugins/aureon-redteam/agents/probe.md"
+  cat > "$root/.claude/agents/probe.md" <<'PROMPT'
+---
+name: probe
+description: Probe agent for parity tests.
+tools: Read, Bash
+model: inherit
+color: "#123456"
+---
+
+# Probe Agent
+
+Body line one.
+Body line two.
+PROMPT
 }
 
 expect_pass() {
   local root="$1" label="$2"
-  if AGENTS_ROOT="$root" "$SYNC" check >/dev/null 2>&1; then
+  if AGENTS_ROOT="$root" "$BASH_BIN" "$SYNC" check >/dev/null 2>&1; then
     pass "$label"
   else
     fail "$label (check exited non-zero)"
@@ -61,7 +78,7 @@ expect_pass() {
 
 expect_fail() {
   local root="$1" label="$2"
-  if AGENTS_ROOT="$root" "$SYNC" check >/dev/null 2>&1; then
+  if AGENTS_ROOT="$root" "$BASH_BIN" "$SYNC" check >/dev/null 2>&1; then
     fail "$label (check exited zero)"
   else
     pass "$label"
@@ -74,22 +91,42 @@ expect_pass "$case_root" "synchronised tree passes"
 
 printf '\nBody line three.\n' >> "$case_root/plugins/aureon-redteam/agents/probe.md"
 expect_fail "$case_root" "plugin body drift is detected"
-AGENTS_ROOT="$case_root" "$SYNC" sync >/dev/null
+AGENTS_ROOT="$case_root" "$BASH_BIN" "$SYNC" sync >/dev/null
 expect_pass "$case_root" "sync repairs plugin body drift"
 
 printf '\nBody line four.\n' >> "$case_root/.agents/agents/probe.md"
 expect_fail "$case_root" "AGY body drift is detected"
-AGENTS_ROOT="$case_root" "$SYNC" sync >/dev/null
+AGENTS_ROOT="$case_root" "$BASH_BIN" "$SYNC" sync >/dev/null
 expect_pass "$case_root" "sync repairs AGY body drift"
 
 sed -i 's/^description: Probe agent for parity tests\.$/description: Diverged description./' "$case_root/.agents/agents/probe.md"
 expect_fail "$case_root" "description drift is detected"
-AGENTS_ROOT="$case_root" "$SYNC" sync >/dev/null
+AGENTS_ROOT="$case_root" "$BASH_BIN" "$SYNC" sync >/dev/null
 expect_pass "$case_root" "sync aligns AGY description with OpenCode"
+
+printf '\nBody line five.\n' >> "$case_root/.claude/agents/probe.md"
+expect_fail "$case_root" "Claude Code body drift is detected"
+AGENTS_ROOT="$case_root" "$BASH_BIN" "$SYNC" sync >/dev/null
+expect_pass "$case_root" "sync repairs Claude Code body drift"
+if grep -q '^tools: Read, Bash$' "$case_root/.claude/agents/probe.md" \
+   && grep -q '^color: "#123456"$' "$case_root/.claude/agents/probe.md"; then
+  pass "sync preserves Claude Code frontmatter (tools, color)"
+else
+  fail "sync clobbered Claude Code frontmatter"
+fi
+
+sed -i 's/^description: Probe agent for parity tests\.$/description: Claude drift./' "$case_root/.claude/agents/probe.md"
+expect_fail "$case_root" "Claude Code description drift is detected"
+AGENTS_ROOT="$case_root" "$BASH_BIN" "$SYNC" sync >/dev/null
+expect_pass "$case_root" "sync aligns Claude Code description with OpenCode"
 
 seed "$work/missing"
 rm "$work/missing/.agents/agents/probe.md"
 expect_fail "$work/missing" "missing AGY agent is detected"
+
+seed "$work/missing_claude"
+rm "$work/missing_claude/.claude/agents/probe.md"
+expect_fail "$work/missing_claude" "missing Claude Code agent is detected"
 
 if [[ "$failures" -ne 0 ]]; then
   printf '\n%d test failure(s)\n' "$failures" >&2
