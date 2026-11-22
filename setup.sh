@@ -24,6 +24,8 @@
 #   ./setup.sh status                 Compare global opencode copies against this repo
 #   ./setup.sh uninstall              Remove global opencode copies matching this repo
 #   ./setup.sh all                    Install AGY plugin, Claude Code config, and opencode agents globally
+#   ./setup.sh scan                   Run the Zero-Toy-Code gate (scanner + parity + test suites)
+#   ./setup.sh gate-install           Install the Zero-Toy-Code pre-commit hook (git core.hooksPath)
 #   ./setup.sh --help
 #
 # Claude Code Discovery & Integration:
@@ -402,6 +404,60 @@ cmd_all() {
   info "complete     opencode agents, Claude Code config, and AGY plugin are installed globally.\n"
 }
 
+# -----------------------------------------------------------------------------
+# Zero-Toy-Code gate
+# -----------------------------------------------------------------------------
+#
+# The enforcement point for the Enterprise Zero-Toy-Code standard (AGENTS.md).
+# It runs the repository scanner over the whole work tree, verifies agent-prompt
+# parity, and executes the behavioural test suites. Any finding, parity drift,
+# or failing suite exits non-zero so the commit or CI run is blocked. The
+# scanner's own unit suite needs pytest; when pytest is absent it is reported
+# as not run and the remaining gates still execute.
+
+SCAN_TOOL="$REPO_ROOT/tools/zero_toy_scan.py"
+
+cmd_scan() {
+  [[ -f "$SCAN_TOOL" ]] || die "scanner not found at $SCAN_TOOL"
+  command -v python3 >/dev/null 2>&1 || die "python3 is required to run the gate"
+  local failures=0
+
+  info "scan" "zero-toy scanner over the work tree"
+  python3 "$SCAN_TOOL" || failures=1
+
+  info "check" "agent prompt parity"
+  "$REPO_ROOT/tools/sync_prompts.sh" check || failures=1
+
+  info "test" "policy-wrap authorization suite"
+  python3 "$REPO_ROOT/.claude/hooks/test_policy_wrap.py" || failures=1
+
+  info "test" "prompt-sync suite"
+  bash "$REPO_ROOT/tools/test_sync_prompts.sh" || failures=1
+
+  if python3 -c "import pytest" >/dev/null 2>&1; then
+    info "test" "scanner unit suite"
+    python3 -m pytest -q "$REPO_ROOT/tools/test_zero_toy_scan.py" || failures=1
+  else
+    info "skip" "pytest absent: scanner unit suite not run"
+  fi
+
+  [[ "$failures" -eq 0 ]] || die "Zero-Toy-Code gate failed"
+  printf '\nZero-Toy-Code gate passed.\n'
+}
+
+cmd_gate_install() {
+  command -v git >/dev/null 2>&1 || die "git is required to install the gate hook"
+  git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1 \
+    || die "not a git repository: $REPO_ROOT"
+  local hook="$REPO_ROOT/.githooks/pre-commit"
+  [[ -f "$hook" ]] || die "pre-commit hook missing at $hook"
+  chmod +x "$hook"
+  git -C "$REPO_ROOT" config core.hooksPath ".githooks"
+  info "installed" "core.hooksPath -> .githooks"
+  printf '\nZero-Toy-Code pre-commit hook active.\n'
+  printf 'Disable with: git config --unset core.hooksPath\n'
+}
+
 case "${1:-}" in
   agy-install)      cmd_agy_install;;
   agy-validate)     cmd_agy_validate;;
@@ -415,6 +471,8 @@ case "${1:-}" in
   status)           cmd_status;;
   uninstall)        cmd_uninstall;;
   all)              cmd_all "${2:-}";;
-  --help|-h|help)   sed -n '2,30p' "$0";;
-  *)                echo "usage: $0 {agy-install|agy-validate|agy-status|agy-uninstall|claude-install [--force]|claude-status|claude-uninstall|install [--force]|open [--no-install]|status|uninstall|all|--help}" >&2; exit 2;;
+  scan)             cmd_scan;;
+  gate-install)     cmd_gate_install;;
+  --help|-h|help)   sed -n '2,32p' "$0";;
+  *)                echo "usage: $0 {agy-install|agy-validate|agy-status|agy-uninstall|claude-install [--force]|claude-status|claude-uninstall|install [--force]|open [--no-install]|status|uninstall|all|scan|gate-install|--help}" >&2; exit 2;;
 esac

@@ -292,13 +292,11 @@ def _host_matches(target: str, scope_value: str) -> bool:
     if not scope_value:
         return False
     tip = _as_ip(target)
-    try:
-        net = ipaddress.ip_network(scope_value, strict=False)
-        if tip is not None:
-            return tip in net
-    except ValueError:
-        pass
-    # domain comparison (exact or subdomain of scope)
+    net = _as_network(scope_value)
+    if tip is not None and net is not None:
+        return tip in net
+    # Scope is not an IP network (or the target is not an IP): compare as a
+    # domain, exact match or subdomain of the scope value.
     t = target.lower().rstrip(".")
     s = scope_value.lower().rstrip(".")
     return t == s or t.endswith("." + s)
@@ -307,6 +305,18 @@ def _host_matches(target: str, scope_value: str) -> bool:
 def _as_ip(value: str):
     try:
         return ipaddress.ip_address(value)
+    except ValueError:
+        return None
+
+
+def _as_network(value: str) -> ipaddress._BaseNetwork | None:
+    """Parse ``value`` as an IP network, or return ``None`` when it is not one.
+
+    Non-network scope values (domain names, empty strings) resolve to ``None``
+    so callers fall through to domain comparison instead of raising.
+    """
+    try:
+        return ipaddress.ip_network(value, strict=False)
     except ValueError:
         return None
 
@@ -331,6 +341,26 @@ def _is_private_net(net: ipaddress._BaseNetwork) -> bool:
         if net.version == priv.version and net.subnet_of(priv):
             return True
     return False
+
+
+def _probe_primary_ipv4() -> str | None:
+    """Return the host's primary IPv4 source address, or ``None`` on failure.
+
+    A connected UDP socket selects a source address from the routing table
+    without sending any packets. Any socket error resolves to ``None`` so the
+    caller leaves its subnet list empty and fails closed.
+    """
+    try:
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    except OSError:
+        return None
+    try:
+        probe.connect(("192.168.0.1", 9))
+        return str(probe.getsockname()[0])
+    except OSError:
+        return None
+    finally:
+        probe.close()
 
 
 def _local_subnets() -> list[ipaddress._BaseNetwork]:
@@ -375,16 +405,11 @@ def _local_subnets() -> list[ipaddress._BaseNetwork]:
                 continue
 
     if not nets:
-        try:
-            probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                probe.connect(("192.168.0.1", 9))  # no packets sent for UDP connect
-                host_ip = probe.getsockname()[0]
-            finally:
-                probe.close()
-            nets.append(ipaddress.ip_network(host_ip + "/24", strict=False))
-        except OSError:
-            pass
+        host_ip = _probe_primary_ipv4()
+        if host_ip is not None:
+            probed = _as_network(host_ip + "/24")
+            if probed is not None:
+                nets.append(probed)
 
     return [n for n in nets if _is_private_net(n) and n.prefixlen < n.max_prefixlen]
 

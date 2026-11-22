@@ -146,6 +146,39 @@ python3 .claude/hooks/test_policy_wrap.py   # 33 behavioural tests for the wrap
 
 ---
 
+## Zero-Toy-Code Gate
+
+The forbidden-pattern rules in [AGENTS.md](AGENTS.md) are enforced by a real
+scanner, `tools/zero_toy_scan.py` (Python 3.10+, standard library only). It
+parses Python with `ast`/`tokenize` and lexes Rust, Solidity, JavaScript,
+TypeScript, JSON and hash-comment formats to separate code from comments and
+strings, then reports placeholder bodies, elided code, toy/hedging phrases,
+test-double vocabulary in production, placeholder strings, coverage-exclusion
+pragmas and unfinished-work tags (rule codes `ZT001`–`ZT013`). Exit status is
+`0` clean, `1` findings, `2` the scan could not run.
+
+```sh
+python3 tools/zero_toy_scan.py                # scan the whole git work tree
+python3 tools/zero_toy_scan.py PATH [PATH]    # scan specific files or directories
+python3 -m pytest tools/test_zero_toy_scan.py # 184 scanner unit tests
+```
+
+`setup.sh` wires the scanner, the prompt-parity check and the behavioural test
+suites into one gate, and installs it as a `pre-commit` hook:
+
+```sh
+./setup.sh scan            # run the full gate (scanner + parity + test suites)
+./setup.sh gate-install    # install the pre-commit hook via git core.hooksPath
+```
+
+The gate also runs in CI on every push and pull request
+([`.github/workflows/zero-toy-code.yml`](.github/workflows/zero-toy-code.yml)),
+so placeholder, elided or toy code cannot reach the default branch. The
+scanner itself is **project-scoped** — it lives in `tools/` and is not copied
+into `~/.claude` by `claude-install`.
+
+---
+
 ## Prompt Parity
 
 Every agent prompt body is identical across harnesses; only platform-specific frontmatter differs.
