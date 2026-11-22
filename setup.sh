@@ -24,7 +24,9 @@
 #   ./setup.sh status                 Compare global opencode copies against this repo
 #   ./setup.sh uninstall              Remove global opencode copies matching this repo
 #   ./setup.sh all                    Install AGY plugin, Claude Code config, and opencode agents globally
-#   ./setup.sh scan                   Run the Zero-Toy-Code gate (scanner + parity + test suites)
+#   ./setup.sh toolchain              Build the hash-verified gate toolchain in .venv (Python 3.11+)
+#   ./setup.sh scan                   Run every offline gate (lint, types, tests, coverage, shell, secrets)
+#   ./setup.sh audit-deps             Audit the pinned toolchain for known vulnerabilities (network)
 #   ./setup.sh gate-install           Install the Zero-Toy-Code pre-commit hook (git core.hooksPath)
 #   ./setup.sh --help
 #
@@ -422,40 +424,150 @@ cmd_all() {
 # -----------------------------------------------------------------------------
 #
 # The enforcement point for the Enterprise Zero-Toy-Code standard (AGENTS.md).
-# It runs the repository scanner over the whole work tree, verifies agent-prompt
-# parity, and executes the behavioural test suites. Any finding, parity drift,
-# or failing suite exits non-zero so the commit or CI run is blocked. The
-# scanner's own unit suite needs pytest; when pytest is absent it is reported
-# as not run and the remaining gates still execute.
+# `scan` runs every offline gate, reports each result, and exits non-zero when
+# any gate fails or a required tool is missing, so a commit or CI run is
+# blocked instead of passing with a gate silently skipped. Tools resolve from
+# the hash-pinned toolchain in .venv (`./setup.sh toolchain`) first, then PATH.
+# `audit-deps` needs the network to reach the vulnerability service, so CI runs
+# it separately and the pre-commit hook stays offline.
 
 SCAN_TOOL="${REPO_ROOT}/tools/zero_toy_scan.py"
+VENV_DIR="${REPO_ROOT}/.venv"
+REQUIREMENTS_DEV="${REPO_ROOT}/requirements-dev.txt"
+GATE_FAILURES=0
+
+# Print the path of a gate tool: the .venv toolchain first, then PATH. Prints
+# nothing when the tool is unavailable.
+gate_tool() {
+  if [[ -x "${VENV_DIR}/bin/$1" ]]; then
+    printf '%s\n' "${VENV_DIR}/bin/$1"
+  elif command -v "$1" >/dev/null 2>&1; then
+    command -v "$1"
+  fi
+}
+
+# Print a Python interpreter that can run the test suites with coverage: the
+# .venv interpreter first, then python3. Prints nothing when neither has
+# pytest and pytest-cov.
+gate_python() {
+  if [[ -x "${VENV_DIR}/bin/python" ]] \
+    && "${VENV_DIR}/bin/python" -c 'import pytest, pytest_cov' 2>/dev/null; then
+    printf '%s\n' "${VENV_DIR}/bin/python"
+  elif python3 -c 'import pytest, pytest_cov' 2>/dev/null; then
+    command -v python3
+  fi
+}
+
+# Record a gate that cannot run because its tool is missing (fail closed).
+gate_missing() {
+  info "FAIL" "$1: $2 is not installed (run ./setup.sh toolchain)"
+  GATE_FAILURES=$((GATE_FAILURES + 1))
+}
+
+# gate_run LABEL COMMAND [ARG ...]: run one gate and record a failure without
+# stopping, so a single invocation reports every failing gate.
+gate_run() {
+  local label="$1" status=0
+  shift
+  info "gate" "${label}"
+  "$@" || status=$?
+  if [[ "${status}" -eq 0 ]]; then
+    info "pass" "${label}"
+  else
+    info "FAIL" "${label} (exit ${status})"
+    GATE_FAILURES=$((GATE_FAILURES + 1))
+  fi
+}
+
+# gate_tool_run LABEL TOOL [ARG ...]: resolve TOOL, then run it as a gate.
+gate_tool_run() {
+  local label="$1" bin
+  bin="$(gate_tool "$2")"
+  if [[ -z "${bin}" ]]; then
+    gate_missing "${label}" "$2"
+    return 0
+  fi
+  shift 2
+  gate_run "${label}" "${bin}" "$@"
+}
+
+# Print the commit that diff-based gates compare against: the merge base with
+# origin/main when that ref exists (CI, fetched clones), otherwise HEAD.
+diff_base() {
+  if git rev-parse --verify --quiet origin/main >/dev/null; then
+    git merge-base origin/main HEAD
+  else
+    printf 'HEAD\n'
+  fi
+}
 
 cmd_scan() {
   [[ -f "${SCAN_TOOL}" ]] || die "scanner not found at ${SCAN_TOOL}"
   command -v python3 >/dev/null 2>&1 || die "python3 is required to run the gate"
-  local failures=0
+  command -v git >/dev/null 2>&1 || die "git is required to run the gate"
+  cd "${REPO_ROOT}"
+  GATE_FAILURES=0
 
-  info "scan" "zero-toy scanner over the work tree"
-  python3 "${SCAN_TOOL}" || failures=1
+  local base scripts_list py
+  local -a scripts
+  base="$(diff_base)"
+  scripts_list="$(git ls-files --cached --others --exclude-standard -- '*.sh' '.githooks/*')"
+  mapfile -t scripts <<<"${scripts_list}"
+  py="$(gate_python)"
 
-  info "check" "agent prompt parity"
-  "${REPO_ROOT}/tools/sync_prompts.sh" check || failures=1
-
-  info "test" "policy-wrap authorization suite"
-  python3 "${REPO_ROOT}/.claude/hooks/test_policy_wrap.py" || failures=1
-
-  info "test" "prompt-sync suite"
-  bash "${REPO_ROOT}/tools/test_sync_prompts.sh" || failures=1
-
-  if python3 -c "import pytest" >/dev/null 2>&1; then
-    info "test" "scanner unit suite"
-    python3 -m pytest -q "${REPO_ROOT}/tools/test_zero_toy_scan.py" || failures=1
+  gate_run "zero-toy scanner" python3 "${SCAN_TOOL}"
+  gate_run "whitespace and conflict markers since ${base}" git diff --check "${base}"
+  gate_tool_run "ruff format" ruff format --check .
+  gate_tool_run "ruff lint (select = ALL)" ruff check .
+  gate_tool_run "mypy strict" mypy
+  if [[ -n "${py}" ]]; then
+    gate_run "pytest with 100% branch coverage" "${py}" -m pytest -q \
+      --cov --cov-report=term-missing --cov-report=xml
   else
-    info "skip" "pytest absent: scanner unit suite not run"
+    gate_missing "pytest with 100% branch coverage" "pytest with pytest-cov"
   fi
+  gate_tool_run "ShellCheck (all checks)" shellcheck "${scripts[@]}"
+  gate_run "setup.sh suite" bash tools/test_setup.sh
+  gate_run "prompt-sync suite" bash tools/test_sync_prompts.sh
+  gate_run "agent prompt parity" tools/sync_prompts.sh check
+  gate_tool_run "actionlint" actionlint
+  gate_tool_run "yamllint (strict)" yamllint --strict .github .yamllint.yaml
+  gate_tool_run "gitleaks: history" gitleaks detect --source . \
+    --config .gitleaks.toml --redact --no-banner
+  gate_tool_run "gitleaks: working tree" gitleaks detect --no-git --source . \
+    --config .gitleaks.toml --redact --no-banner
 
-  [[ "${failures}" -eq 0 ]] || die "Zero-Toy-Code gate failed"
+  if [[ "${GATE_FAILURES}" -ne 0 ]]; then
+    die "Zero-Toy-Code gate failed: ${GATE_FAILURES} gate(s)"
+  fi
   printf '\nZero-Toy-Code gate passed.\n'
+}
+
+cmd_toolchain() {
+  [[ -f "${REQUIREMENTS_DEV}" ]] || die "missing ${REQUIREMENTS_DEV}"
+  command -v python3 >/dev/null 2>&1 || die "python3 is required to build the toolchain"
+  python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' \
+    || die "the gate toolchain needs Python 3.11 or later"
+  if [[ ! -x "${VENV_DIR}/bin/python" ]]; then
+    info "creating" "${VENV_DIR}"
+    python3 -m venv "${VENV_DIR}"
+  fi
+  info "installing" "hash-verified toolchain from requirements-dev.txt"
+  "${VENV_DIR}/bin/python" -m pip install --disable-pip-version-check --quiet \
+    --require-hashes -r "${REQUIREMENTS_DEV}"
+  info "ready" "${VENV_DIR}"
+  if ! command -v gitleaks >/dev/null 2>&1; then
+    info "note" "gitleaks is not on PATH; install it with the system package manager"
+    info "" "(apt-get install gitleaks, pkg install gitleaks, or brew install gitleaks)"
+  fi
+}
+
+cmd_audit_deps() {
+  local bin
+  bin="$(gate_tool pip-audit)"
+  [[ -n "${bin}" ]] || die "pip-audit is not installed (run ./setup.sh toolchain)"
+  info "audit" "requirements-dev.txt against the PyPI vulnerability service"
+  "${bin}" --strict --require-hashes --disable-pip -r "${REQUIREMENTS_DEV}"
 }
 
 cmd_gate_install() {
@@ -485,7 +597,9 @@ case "${1:-}" in
   uninstall)        cmd_uninstall;;
   all)              cmd_all "${2:-}";;
   scan)             cmd_scan;;
+  toolchain)        cmd_toolchain;;
+  audit-deps)       cmd_audit_deps;;
   gate-install)     cmd_gate_install;;
   --help|-h|help)   awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0";;
-  *)                echo "usage: $0 {agy-install|agy-validate|agy-status|agy-uninstall|claude-install [--force]|claude-status|claude-uninstall|install [--force]|open [--no-install]|status|uninstall|all|scan|gate-install|--help}" >&2; exit 2;;
+  *)                echo "usage: $0 {agy-install|agy-validate|agy-status|agy-uninstall|claude-install [--force]|claude-status|claude-uninstall|install [--force]|open [--no-install]|status|uninstall|all|scan|toolchain|audit-deps|gate-install|--help}" >&2; exit 2;;
 esac

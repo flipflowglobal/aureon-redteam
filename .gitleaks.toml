@@ -1,0 +1,15 @@
+# gitleaks configuration: the full default rule set, with an allowlist limited to
+# generated, git-ignored environments (third-party packages, tool caches). No
+# repository source path, rule or fingerprint is allowlisted.
+title = "aureon-redteam secret scanning"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Generated, git-ignored toolchain and cache directories"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)\.(mypy|pytest|ruff)_cache/''',
+  '''(^|/)__pycache__/''',
+]

@@ -86,7 +86,7 @@ global agents/skills in `~/.claude/`:
   agents/<agent>.md        # the six subagents, invoked with @agent-<name> or the Task tool
   skills/<skill>/SKILL.md   # redteam-ops and aureon-quant operational procedures
   hooks/policy_wrap.py      # PreToolUse authorization wrap (deny-by-default)
-  hooks/test_policy_wrap.py # behavioural tests for the wrap
+  hooks/test_policy_wrap.py # pytest suite for the wrap (100% branch coverage)
   settings.json             # permissions + the policy-wrap hook wiring
 CLAUDE.md                   # project memory; imports AGENTS.md (Zero-Toy-Code standard)
 ```
@@ -120,8 +120,20 @@ It is **deny-by-default** and fails closed:
   record is `status: active`, carries both internal and owner approval, is
   inside its validity window, enables network access, and explicitly lists the
   target (honouring `excluded_targets`).
+- A CIDR target is checked over its full width: a sweep is authorized only when
+  the whole range lies inside an authorized scope (or a documentation range for
+  testbed traffic), never by its first address. IPv6 address literals are
+  targets like IPv4 ones.
+- Commands run indirectly are analysed too: a shell's `-c` argument, `eval`, and
+  `$(…)`, `<(…)`, `>(…)` and backtick substitutions, up to 8 levels deep.
+  Deeper nesting is denied.
 - Denial-of-service tooling and blanket scope (`0.0.0.0/0`, `::/0`) are denied
   unconditionally and cannot be enabled by any record.
+- A malformed hook event, any internal fault (logged with an error ID), and an
+  unreadable, oversized or malformed engagement record all fail closed. A bad
+  record only disables itself; it is listed in denials and never disables the
+  other records. Timestamps must carry a timezone, and `targets` /
+  `excluded_targets` must be lists of entries with a string `value`.
 
 #### Local-network scope mode
 
@@ -141,7 +153,7 @@ authorize shared or public networks (café / hotel / office Wi-Fi) beyond device
 you are entitled to test.
 
 ```sh
-python3 .claude/hooks/test_policy_wrap.py   # 33 behavioural tests for the wrap
+python3 -m pytest .claude/hooks/test_policy_wrap.py   # 188 tests, deterministic clock and network
 ```
 
 ---
@@ -160,22 +172,56 @@ pragmas and unfinished-work tags (rule codes `ZT001`–`ZT013`). Exit status is
 ```sh
 python3 tools/zero_toy_scan.py                # scan the whole git work tree
 python3 tools/zero_toy_scan.py PATH [PATH]    # scan specific files or directories
-python3 -m pytest tools/test_zero_toy_scan.py # 184 scanner unit tests
 ```
 
-`setup.sh` wires the scanner, the prompt-parity check and the behavioural test
-suites into one gate, and installs it as a `pre-commit` hook:
+### Gates
+
+`./setup.sh scan` runs every offline gate, reports each result, and exits
+non-zero if any gate fails **or a required tool is missing** — no gate is ever
+skipped silently. The pre-commit hook and CI both run it.
+
+| Gate | Tool and configuration |
+|---|---|
+| Zero-Toy-Code scanner | `tools/zero_toy_scan.py` over every tracked and untracked file |
+| Whitespace / conflict markers | `git diff --check` against the merge base with `origin/main` |
+| Format | `ruff format --check` |
+| Lint | `ruff check` with `select = ["ALL"]` (`pyproject.toml`) |
+| Types | `mypy` strict, `disallow_any_explicit`, `warn_unreachable`, extra error codes |
+| Tests + coverage | `pytest` (strict markers/config, warnings are errors) with **100% line and branch coverage** of `tools/` and `.claude/hooks/` |
+| Shell | ShellCheck with every optional check enabled (`.shellcheckrc`) |
+| Shell suites | `tools/test_setup.sh` (sandboxed HOME), `tools/test_sync_prompts.sh` |
+| Prompt parity | `tools/sync_prompts.sh check` |
+| Workflow | `actionlint` |
+| YAML | `yamllint --strict` (`.yamllint.yaml`, default rules) |
+| Secrets | `gitleaks` over history and the working tree (`.gitleaks.toml`, default rules) |
+
+`./setup.sh audit-deps` checks the pinned toolchain against the PyPI
+vulnerability service with `pip-audit --strict`. It needs the network, so CI
+runs it as a separate job and the pre-commit hook stays offline.
+
+### Toolchain
+
+The gate tools are pinned with sha256 hashes in `requirements-dev.txt`
+(generated from `requirements-dev.in` by `uv pip compile --generate-hashes`)
+and installed with `pip install --require-hashes` into `.venv`. They need
+Python 3.11+; the production code itself stays on the standard library and
+supports Python 3.10+. gitleaks is not on PyPI: install it with the system
+package manager.
 
 ```sh
-./setup.sh scan            # run the full gate (scanner + parity + test suites)
-./setup.sh gate-install    # install the pre-commit hook via git core.hooksPath
+./setup.sh toolchain       # build the hash-verified toolchain in .venv
+./setup.sh scan            # run every offline gate
+./setup.sh audit-deps      # vulnerability audit of the pinned toolchain (network)
+./setup.sh gate-install    # run `scan` before every commit (git core.hooksPath)
 ```
 
-The gate also runs in CI on every push and pull request
-([`.github/workflows/zero-toy-code.yml`](.github/workflows/zero-toy-code.yml)),
-so placeholder, elided or toy code cannot reach the default branch. The
-scanner itself is **project-scoped** — it lives in `tools/` and is not copied
-into `~/.claude` by `claude-install`.
+CI ([`.github/workflows/zero-toy-code.yml`](.github/workflows/zero-toy-code.yml))
+runs `scan` and `audit-deps` on every push and pull request with read-only
+permissions, unpersisted checkout credentials, job timeouts, and third-party
+actions pinned to commit SHAs. On pull requests it also requires 100% coverage
+of every changed line (`diff-cover`). The scanner and the gate configuration
+are **project-scoped** — they are not copied into `~/.claude` by
+`claude-install`.
 
 ---
 
