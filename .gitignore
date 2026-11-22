@@ -30,3 +30,13 @@ Thumbs.db
 # Python bytecode cache (policy wrap hook)
 __pycache__/
 *.pyc
+
+# Gate toolchain virtualenv and generated gate artifacts
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

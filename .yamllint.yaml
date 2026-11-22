@@ -1,0 +1,4 @@
+---
+# yamllint configuration: the default rule set at its default levels. The gate
+# runs yamllint with --strict, so warnings fail it as well as errors.
+extends: default

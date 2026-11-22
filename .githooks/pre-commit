@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Zero-Toy-Code pre-commit hook.
+#
+# Runs the repository gate (setup.sh scan) before a commit is created. A
+# non-zero gate result aborts the commit, so unfinished or non-production code
+# never enters history. Install with: ./setup.sh gate-install
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+exec "${repo_root}/setup.sh" scan

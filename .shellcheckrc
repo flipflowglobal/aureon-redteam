@@ -1,0 +1,6 @@
+# ShellCheck configuration for every shell script in this repository
+# (setup.sh, tools/*.sh, .githooks/pre-commit). All optional checks are on and
+# the gate runs at style severity, so any finding fails it.
+enable=all
+external-sources=true
+shell=bash

@@ -18,6 +18,16 @@ executed actions only; and authorization-first execution for any offensive
 operation (never bypass `PolicyEngine::authorize()`, offline-by-default unless a
 signed engagement record permits egress).
 
+## Quality gate
+
+`./setup.sh scan` is the definition of done for every change: the Zero-Toy-Code
+scanner, ruff (`select = ["ALL"]`), mypy strict, pytest with 100% branch
+coverage, ShellCheck with every check enabled, the shell suites, prompt parity,
+actionlint, yamllint and gitleaks. It fails when any gate fails or a tool is
+missing. Build the hash-pinned toolchain first with `./setup.sh toolchain`;
+`./setup.sh gate-install` runs the gate before every commit. Never bypass it
+with `--no-verify`.
+
 ## Subagents
 
 Project subagents live in `.claude/agents/` and are invoked with the `Task`

@@ -23,10 +23,10 @@
 set -euo pipefail
 
 ROOT="${AGENTS_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
-OC_AGENTS="$ROOT/.opencode/agents"
-AGY_AGENTS="$ROOT/.agents/agents"
-PLUGIN_AGENTS="$ROOT/plugins/aureon-redteam/agents"
-CLAUDE_AGENTS="$ROOT/.claude/agents"
+OC_AGENTS="${ROOT}/.opencode/agents"
+AGY_AGENTS="${ROOT}/.agents/agents"
+PLUGIN_AGENTS="${ROOT}/plugins/aureon-redteam/agents"
+CLAUDE_AGENTS="${ROOT}/.claude/agents"
 
 failures=0
 synced=0
@@ -35,131 +35,134 @@ die() { printf 'sync_prompts: %s\n' "$*" >&2; exit 1; }
 info() { printf '  %-12s %s\n' "$@"; }
 fail() { printf '  %-12s %s\n' "FAIL" "$*" >&2; failures=$((failures + 1)); }
 
+# The awk programs are constants run directly by `awk` rather than wrapped in
+# shell functions: a function called on the left of `||` runs with `set -e`
+# disabled, while a failing `awk` here propagates its own exit status (2 on a
+# malformed file) to the explicit handler at each call site. Each program reads
+# its input once: O(n) time in the file size, O(1) extra memory.
+
 # Print the frontmatter block, including both '---' delimiters.
-frontmatter_of() {
-  awk '
-    { print }
-    /^---[[:space:]]*$/ { count++; if (count == 2) exit }
-    END { if (count < 2) exit 2 }
-  ' "$1"
-}
+readonly AWK_FRONTMATTER='
+  { print }
+  /^---[[:space:]]*$/ { count++; if (count == 2) exit }
+  END { if (count < 2) exit 2 }
+'
 
 # Print every line after the closing '---' delimiter, byte for byte.
-body_of() {
-  awk '
-    body { print; next }
-    /^---[[:space:]]*$/ { count++; if (count == 2) { body = 1 } ; next }
-    END { if (count < 2 || body == 0) exit 2 }
-  ' "$1"
-}
+readonly AWK_BODY='
+  body { print; next }
+  /^---[[:space:]]*$/ { count++; if (count == 2) { body = 1 } ; next }
+  END { if (count < 2 || body == 0) exit 2 }
+'
 
-# Print the frontmatter with its description replaced by the canonical value.
-rewrite_description() {
-  awk -v desc="$2" '
-    /^---[[:space:]]*$/ { count++; print; next }
-    count == 1 && !done && /^description:/ { print "description: " desc; done = 1; next }
-    { print }
-    END { if (count < 2 || !done) exit 2 }
-  ' <<<"$1"
-}
+# Print the frontmatter with its description replaced by ENVIRON["CANONICAL_DESC"].
+# The value is read from the environment, not `awk -v`, because `-v` expands
+# backslash escapes and would rewrite a description such as `C:\path`.
+readonly AWK_REWRITE_DESCRIPTION='
+  /^---[[:space:]]*$/ { count++; print; next }
+  count == 1 && !done && /^description:/ {
+    print "description: " ENVIRON["CANONICAL_DESC"]; done = 1; next
+  }
+  { print }
+  END { if (count < 2 || !done) exit 2 }
+'
 
 # Print the value of the frontmatter `description:` field.
-description_of() {
-  awk '
-    /^---[[:space:]]*$/ { count++; next }
-    count == 1 && /^description:/ { sub(/^description:[[:space:]]*/, ""); print; exit }
-    count >= 2 { exit }
-  ' "$1"
-}
-
-body_hash() {
-  body_of "$1" | sha256sum | cut -d' ' -f1
-}
+readonly AWK_DESCRIPTION='
+  /^---[[:space:]]*$/ { count++; next }
+  count == 1 && /^description:/ { sub(/^description:[[:space:]]*/, ""); print; exit }
+  count >= 2 { exit }
+'
 
 require_dirs() {
-  [[ -d "$OC_AGENTS" ]] || die "missing canonical directory: $OC_AGENTS"
-  [[ -d "$AGY_AGENTS" ]] || die "missing AGY directory: $AGY_AGENTS"
-  [[ -d "$PLUGIN_AGENTS" ]] || die "missing plugin directory: $PLUGIN_AGENTS"
-  [[ -d "$CLAUDE_AGENTS" ]] || die "missing Claude Code directory: $CLAUDE_AGENTS"
+  [[ -d "${OC_AGENTS}" ]] || die "missing canonical directory: ${OC_AGENTS}"
+  [[ -d "${AGY_AGENTS}" ]] || die "missing AGY directory: ${AGY_AGENTS}"
+  [[ -d "${PLUGIN_AGENTS}" ]] || die "missing plugin directory: ${PLUGIN_AGENTS}"
+  [[ -d "${CLAUDE_AGENTS}" ]] || die "missing Claude Code directory: ${CLAUDE_AGENTS}"
 }
 
 check_agent() {
   local name="$1"
-  local src="$OC_AGENTS/$name"
-  local agy="$AGY_AGENTS/$name"
-  local plug="$PLUGIN_AGENTS/$name"
-  local claude="$CLAUDE_AGENTS/$name"
-  local before="$failures"
+  local src="${OC_AGENTS}/${name}"
+  local agy="${AGY_AGENTS}/${name}"
+  local plug="${PLUGIN_AGENTS}/${name}"
+  local claude="${CLAUDE_AGENTS}/${name}"
+  local before="${failures}"
 
-  if [[ ! -f "$agy" ]]; then
-    fail "$name: missing AGY definition"
+  if [[ ! -f "${agy}" ]]; then
+    fail "${name}: missing AGY definition"
     return
   fi
-  if [[ ! -f "$plug" ]]; then
-    fail "$name: missing plugin definition"
+  if [[ ! -f "${plug}" ]]; then
+    fail "${name}: missing plugin definition"
     return
   fi
-  if [[ ! -f "$claude" ]]; then
-    fail "$name: missing Claude Code definition"
+  if [[ ! -f "${claude}" ]]; then
+    fail "${name}: missing Claude Code definition"
     return
   fi
 
+  # pipefail makes each assignment fail when awk rejects a malformed file.
   local src_body agy_body plug_body claude_body
-  src_body="$(body_hash "$src")" || { fail "$name: unreadable OpenCode body"; return; }
-  agy_body="$(body_hash "$agy")" || { fail "$name: unreadable AGY body"; return; }
-  plug_body="$(body_hash "$plug")" || { fail "$name: unreadable plugin body"; return; }
-  claude_body="$(body_hash "$claude")" || { fail "$name: unreadable Claude Code body"; return; }
+  src_body="$(awk "${AWK_BODY}" "${src}" | sha256sum | cut -d' ' -f1)" \
+    || { fail "${name}: unreadable OpenCode body"; return; }
+  agy_body="$(awk "${AWK_BODY}" "${agy}" | sha256sum | cut -d' ' -f1)" \
+    || { fail "${name}: unreadable AGY body"; return; }
+  plug_body="$(awk "${AWK_BODY}" "${plug}" | sha256sum | cut -d' ' -f1)" \
+    || { fail "${name}: unreadable plugin body"; return; }
+  claude_body="$(awk "${AWK_BODY}" "${claude}" | sha256sum | cut -d' ' -f1)" \
+    || { fail "${name}: unreadable Claude Code body"; return; }
 
-  [[ "$src_body" == "$agy_body" ]] || fail "$name: AGY body differs from OpenCode body ($agy_body != $src_body)"
-  [[ "$agy_body" == "$plug_body" ]] || fail "$name: plugin body differs from AGY body ($plug_body != $agy_body)"
-  [[ "$src_body" == "$claude_body" ]] || fail "$name: Claude Code body differs from OpenCode body ($claude_body != $src_body)"
-  cmp -s "$agy" "$plug" || fail "$name: plugin file is not byte-identical to AGY file"
+  [[ "${src_body}" == "${agy_body}" ]] || fail "${name}: AGY body differs from OpenCode body (${agy_body} != ${src_body})"
+  [[ "${agy_body}" == "${plug_body}" ]] || fail "${name}: plugin body differs from AGY body (${plug_body} != ${agy_body})"
+  [[ "${src_body}" == "${claude_body}" ]] || fail "${name}: Claude Code body differs from OpenCode body (${claude_body} != ${src_body})"
+  cmp -s "${agy}" "${plug}" || fail "${name}: plugin file is not byte-identical to AGY file"
 
   local src_desc agy_desc claude_desc
-  src_desc="$(description_of "$src")"
-  agy_desc="$(description_of "$agy")"
-  claude_desc="$(description_of "$claude")"
-  [[ -n "$src_desc" ]] || fail "$name: OpenCode frontmatter has no description"
-  [[ -n "$agy_desc" ]] || fail "$name: AGY frontmatter has no description"
-  [[ -n "$claude_desc" ]] || fail "$name: Claude Code frontmatter has no description"
-  [[ "$src_desc" == "$agy_desc" ]] || fail "$name: AGY description differs from OpenCode"
-  [[ "$src_desc" == "$claude_desc" ]] || fail "$name: Claude Code description differs from OpenCode"
+  src_desc="$(awk "${AWK_DESCRIPTION}" "${src}")"
+  agy_desc="$(awk "${AWK_DESCRIPTION}" "${agy}")"
+  claude_desc="$(awk "${AWK_DESCRIPTION}" "${claude}")"
+  [[ -n "${src_desc}" ]] || fail "${name}: OpenCode frontmatter has no description"
+  [[ -n "${agy_desc}" ]] || fail "${name}: AGY frontmatter has no description"
+  [[ -n "${claude_desc}" ]] || fail "${name}: Claude Code frontmatter has no description"
+  [[ "${src_desc}" == "${agy_desc}" ]] || fail "${name}: AGY description differs from OpenCode"
+  [[ "${src_desc}" == "${claude_desc}" ]] || fail "${name}: Claude Code description differs from OpenCode"
 
-  if [[ "$failures" -eq "$before" ]]; then
-    info "ok" "$name"
+  if [[ "${failures}" -eq "${before}" ]]; then
+    info "ok" "${name}"
   fi
 }
 
 check_orphans() {
   local f name
-  for f in "$AGY_AGENTS"/*.md; do
-    [[ -e "$f" ]] || continue
-    name="$(basename "$f")"
-    [[ -f "$OC_AGENTS/$name" ]] || fail "$name: AGY agent has no OpenCode source"
+  for f in "${AGY_AGENTS}"/*.md; do
+    [[ -e "${f}" ]] || continue
+    name="$(basename "${f}")"
+    [[ -f "${OC_AGENTS}/${name}" ]] || fail "${name}: AGY agent has no OpenCode source"
   done
-  for f in "$PLUGIN_AGENTS"/*.md; do
-    [[ -e "$f" ]] || continue
-    name="$(basename "$f")"
-    [[ -f "$OC_AGENTS/$name" ]] || fail "$name: plugin agent has no OpenCode source"
+  for f in "${PLUGIN_AGENTS}"/*.md; do
+    [[ -e "${f}" ]] || continue
+    name="$(basename "${f}")"
+    [[ -f "${OC_AGENTS}/${name}" ]] || fail "${name}: plugin agent has no OpenCode source"
   done
-  for f in "$CLAUDE_AGENTS"/*.md; do
-    [[ -e "$f" ]] || continue
-    name="$(basename "$f")"
-    [[ -f "$OC_AGENTS/$name" ]] || fail "$name: Claude Code agent has no OpenCode source"
+  for f in "${CLAUDE_AGENTS}"/*.md; do
+    [[ -e "${f}" ]] || continue
+    name="$(basename "${f}")"
+    [[ -f "${OC_AGENTS}/${name}" ]] || fail "${name}: Claude Code agent has no OpenCode source"
   done
 }
 
 cmd_check() {
   require_dirs
   local src name
-  for src in "$OC_AGENTS"/*.md; do
-    [[ -e "$src" ]] || continue
-    name="$(basename "$src")"
-    check_agent "$name"
+  for src in "${OC_AGENTS}"/*.md; do
+    [[ -e "${src}" ]] || continue
+    name="$(basename "${src}")"
+    check_agent "${name}"
   done
   check_orphans
-  if [[ "$failures" -ne 0 ]]; then
-    printf '\nprompt parity: %d failure(s)\n' "$failures" >&2
+  if [[ "${failures}" -ne 0 ]]; then
+    printf '\nprompt parity: %d failure(s)\n' "${failures}" >&2
     exit 1
   fi
   printf '\nprompt parity: all agent bodies and descriptions match\n'
@@ -172,38 +175,40 @@ cmd_sync() {
   trap 'rm -f "${tmp:-}"' EXIT
 
   local src name agy plug claude fm cfm src_desc
-  for src in "$OC_AGENTS"/*.md; do
-    [[ -e "$src" ]] || continue
-    name="$(basename "$src")"
-    agy="$AGY_AGENTS/$name"
-    plug="$PLUGIN_AGENTS/$name"
-    claude="$CLAUDE_AGENTS/$name"
+  for src in "${OC_AGENTS}"/*.md; do
+    [[ -e "${src}" ]] || continue
+    name="$(basename "${src}")"
+    agy="${AGY_AGENTS}/${name}"
+    plug="${PLUGIN_AGENTS}/${name}"
+    claude="${CLAUDE_AGENTS}/${name}"
 
-    [[ -f "$agy" ]] || die "no AGY frontmatter source for $name"
-    [[ -f "$plug" ]] || die "no plugin target for $name"
-    [[ -f "$claude" ]] || die "no Claude Code frontmatter source for $name"
+    [[ -f "${agy}" ]] || die "no AGY frontmatter source for ${name}"
+    [[ -f "${plug}" ]] || die "no plugin target for ${name}"
+    [[ -f "${claude}" ]] || die "no Claude Code frontmatter source for ${name}"
 
-    src_desc="$(description_of "$src")"
-    [[ -n "$src_desc" ]] || die "no description in $src"
+    src_desc="$(awk "${AWK_DESCRIPTION}" "${src}")"
+    [[ -n "${src_desc}" ]] || die "no description in ${src}"
 
     # AGY + plugin mirror: AGY frontmatter + canonical body.
-    fm="$(frontmatter_of "$agy")" || die "cannot read frontmatter from $agy"
-    fm="$(rewrite_description "$fm" "$src_desc")" || die "cannot align description in $agy"
-    printf '%s\n' "$fm" > "$tmp"
-    body_of "$src" >> "$tmp" || die "cannot read body from $src"
-    cp "$tmp" "$agy"
-    cp "$agy" "$plug"
+    fm="$(awk "${AWK_FRONTMATTER}" "${agy}")" || die "cannot read frontmatter from ${agy}"
+    fm="$(CANONICAL_DESC="${src_desc}" awk "${AWK_REWRITE_DESCRIPTION}" <<<"${fm}")" \
+      || die "cannot align description in ${agy}"
+    printf '%s\n' "${fm}" > "${tmp}"
+    awk "${AWK_BODY}" "${src}" >> "${tmp}" || die "cannot read body from ${src}"
+    cp "${tmp}" "${agy}"
+    cp "${agy}" "${plug}"
 
     # Claude Code mirror: its own preserved frontmatter + canonical body.
-    cfm="$(frontmatter_of "$claude")" || die "cannot read frontmatter from $claude"
-    cfm="$(rewrite_description "$cfm" "$src_desc")" || die "cannot align description in $claude"
-    printf '%s\n' "$cfm" > "$tmp"
-    body_of "$src" >> "$tmp" || die "cannot read body from $src"
-    cp "$tmp" "$claude"
+    cfm="$(awk "${AWK_FRONTMATTER}" "${claude}")" || die "cannot read frontmatter from ${claude}"
+    cfm="$(CANONICAL_DESC="${src_desc}" awk "${AWK_REWRITE_DESCRIPTION}" <<<"${cfm}")" \
+      || die "cannot align description in ${claude}"
+    printf '%s\n' "${cfm}" > "${tmp}"
+    awk "${AWK_BODY}" "${src}" >> "${tmp}" || die "cannot read body from ${src}"
+    cp "${tmp}" "${claude}"
 
     synced=$((synced + 1))
   done
-  printf 'sync_prompts: wrote %d AGY/plugin/Claude agents from OpenCode bodies\n' "$synced"
+  printf 'sync_prompts: wrote %d AGY/plugin/Claude agents from OpenCode bodies\n' "${synced}"
 }
 
 case "${1:-}" in

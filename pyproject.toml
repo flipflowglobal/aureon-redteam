@@ -1,0 +1,84 @@
+# Tool configuration for the Python code in this repository:
+#   tools/zero_toy_scan.py          Zero-Toy-Code scanner (repository gate)
+#   .claude/hooks/policy_wrap.py    PreToolUse authorization policy wrap
+# and their test suites. Both modules are standalone scripts with no
+# third-party runtime dependencies; the pinned development toolchain lives in
+# requirements-dev.txt. Settings follow the Engineering Standard, section 10.1.
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-include = [".claude/hooks/*.py"]
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+  "COM812",  # conflicts with `ruff format`
+  "CPY001",  # license headers are a legal policy, not a quality gate
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Any".msg = "Use a precise type, a Protocol, or object."
+"typing_extensions.Any".msg = "Use a precise type, a Protocol, or object."
+"typing.cast".msg = "Narrow with isinstance or a TypeGuard, or validate at the boundary."
+"typing_extensions.cast".msg = "Narrow with isinstance or a TypeGuard, or validate at the boundary."
+"contextlib.suppress".msg = "Handle, log, or propagate the error explicitly."
+"unittest.mock".msg = "Test doubles belong in test-only code."
+"pytest".msg = "Test frameworks belong in test-only code."
+
+[tool.ruff.lint.per-file-ignores]
+"**/test_*.py" = ["S101", "PLR2004", "D1", "TID251", "INP001"]
+"**/conftest.py" = ["S101", "PLR2004", "D1", "TID251", "INP001"]
+# Both directories hold standalone scripts loaded by path, not packages.
+"tools/*.py" = ["INP001"]
+".claude/hooks/*.py" = ["INP001"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["tools", ".claude/hooks"]
+mypy_path = ["tools", ".claude/hooks"]
+strict = true
+warn_unreachable = true
+disallow_any_explicit = true
+disallow_any_unimported = true
+exclude = ["^(build|dist|venv)/"]
+enable_error_code = [
+  "ignore-without-code",
+  "redundant-expr",
+  "redundant-self",
+  "truthy-bool",
+  "truthy-iterable",
+  "possibly-undefined",
+  "unused-awaitable",
+  "explicit-override",
+  "mutable-override",
+  "deprecated",
+  "exhaustive-match",
+]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tools", ".claude/hooks"]
+addopts = ["--strict-markers", "--strict-config", "-ra", "--import-mode=prepend"]
+xfail_strict = true
+filterwarnings = ["error"]
+markers = ["integration: needs network or credentials; runs only in the integration job"]
+
+[tool.coverage.run]
+branch = true
+source = ["tools", ".claude/hooks"]
+omit = ["**/test_*.py"]
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true
+skip_covered = false
+exclude_also = [
+  "if TYPE_CHECKING:",
+  "@(typing\\.)?overload",
+  "@(abc\\.)?abstractmethod",
+  "assert_never\\(",
+]
