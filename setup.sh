@@ -16,7 +16,7 @@
 #   ./setup.sh agy-validate           Validate AGY plugin manifest, agents, and rules
 #   ./setup.sh agy-status             Check AGY plugin and workspace configuration status
 #   ./setup.sh agy-uninstall          Uninstall global AGY plugin
-#   ./setup.sh claude-install [--force]  Install Claude Code agents+skills+policy wrap to ~/.claude
+#   ./setup.sh claude-install [--force]  Install Claude Code agents and skills to ~/.claude (hook stays project-scoped)
 #   ./setup.sh claude-status          Compare global Claude Code copies against this repo
 #   ./setup.sh claude-uninstall       Remove global Claude Code copies matching this repo
 #   ./setup.sh install [--force]      Install/sync opencode agents to global config dir
@@ -64,6 +64,17 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
 info() { printf '  %-12s %s\n' "$@"; }
 
+# Commands that install copies take at most one option, `--force`. Anything else
+# is a typo that would otherwise run the command without the intended option.
+check_force_option() {
+  if [[ "$#" -gt 1 ]]; then
+    die "unexpected arguments: $*"
+  fi
+  if [[ -n "${1:-}" && "${1}" != "--force" ]]; then
+    die "unknown option: ${1} (expected --force or nothing)"
+  fi
+}
+
 # Binary lookups always succeed and print the resolved path, or nothing when the
 # binary is absent. Callers test for an empty result, so the lookup is never
 # invoked in a condition where `set -e` would be suspended inside it.
@@ -98,7 +109,7 @@ require_agy_sources() {
 }
 
 validate_json() {
-  local bad=0
+  local bad=0 j
   for j in "${OPENCODE_SRC}"/*.json "${AGY_PLUGIN_SRC}"/*.json; do
     [[ -e "${j}" ]] || continue
     if python3 -m json.tool "${j}" >/dev/null 2>&1; then
@@ -524,7 +535,10 @@ warn_unpinned_ruff() {
   bin="$(gate_tool ruff)"
   pinned="$(sed -n 's/^ruff==//p' "${REPO_ROOT}/requirements-dev.in")"
   [[ -n "${bin}" && -n "${pinned}" ]] || return 0
-  actual="$("${bin}" --version)"
+  # An unreadable version skips the warning; the ruff gates still run and fail.
+  if ! actual="$("${bin}" --version)"; then
+    return 0
+  fi
   if [[ "${actual}" != "ruff ${pinned}" ]]; then
     info "warning" "${actual} differs from the pinned ruff ${pinned}; results may differ"
   fi
@@ -541,7 +555,11 @@ gate_gitleaks() {
     gate_missing "gitleaks: working tree" gitleaks
     return 0
   fi
-  version="$("${bin}" version)"
+  # A version that cannot be read is treated as pre-8.19: `detect` exists in
+  # every 8.x release.
+  if ! version="$("${bin}" version)"; then
+    version=""
+  fi
   if [[ "${version}" =~ ^v?8\.(19|[2-9][0-9])\. || "${version}" =~ ^v?(9|[1-9][0-9]+)\. ]]; then
     gate_run "gitleaks: history" "${bin}" git --config .gitleaks.toml --redact --no-banner .
     gate_run "gitleaks: working tree" "${bin}" dir --config .gitleaks.toml --redact --no-banner .
@@ -648,14 +666,14 @@ case "${1:-}" in
   agy-validate)     cmd_agy_validate;;
   agy-status)       cmd_agy_status;;
   agy-uninstall)    cmd_agy_uninstall;;
-  claude-install)   cmd_claude_install "${2:-}";;
+  claude-install)   shift; check_force_option "$@"; cmd_claude_install "${1:-}";;
   claude-status)    cmd_claude_status;;
   claude-uninstall) cmd_claude_uninstall;;
-  install)          cmd_install "${2:-}";;
+  install)          shift; check_force_option "$@"; cmd_install "${1:-}";;
   open)             shift; cmd_open "$@";;
   status)           cmd_status;;
   uninstall)        cmd_uninstall;;
-  all)              cmd_all "${2:-}";;
+  all)              shift; check_force_option "$@"; cmd_all "${1:-}";;
   scan)             cmd_scan;;
   toolchain)        cmd_toolchain;;
   audit-deps)       cmd_audit_deps;;

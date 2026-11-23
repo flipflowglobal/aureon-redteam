@@ -4,11 +4,31 @@ One record per engagement, one engagement per authorized target set.
 The policy layer is **deny-by-default**: anything not explicitly listed in an
 `approved` record is out of scope.
 
-> A record in this directory is **inert documentation** unless the policy engine
-> loads and validates it. This repository currently contains agent definitions,
-> not the engine. Do not treat a YAML file here as proof of authorization.
+> Records here are **live authorization** under Claude Code: the policy wrap
+> (`.claude/hooks/policy_wrap.py`) loads every `*.yaml` / `*.yml` file in this
+> directory except `engagement.example.yaml`, from the project root, and allows
+> or denies offensive commands accordingly. OpenCode and Antigravity have no
+> equivalent hook, so there a record is documentation only.
 
-## Hard rules (must be enforced by `src/policy.rs`)
+## What the policy wrap enforces
+
+| Rule | Enforced by the wrap |
+|---|---|
+| `status: active`, both `approved: true` flags, timezone-aware validity window | Yes |
+| `network_access.enabled` and `allowed_targets_only` both `true` | Yes |
+| Explicit `targets` (whole CIDR must fit), `excluded_targets` honoured | Yes |
+| No blanket scope (`/0` in any spelling, `*.` wildcards, "all …") | Yes |
+| Denial-of-service tooling and flood flags denied | Yes |
+| `local_network` bounded to private, host-attached subnets | Yes |
+| Owner `document_reference` / `document_sha256` verified against a document | **No** — only `approved: true` is checked |
+| `audit.record_sha256` sealed, so any scope change invalidates approval | **No** |
+| `forbidden_tests` such as social engineering or data exfiltration | **No** — not detectable from a command line |
+| `rate_limits`, `stop_conditions`, SSID targets | **No** |
+
+The rules below are the policy; the rows marked **No** depend on the operator
+and the reviewer until the wrap enforces them.
+
+## Hard rules
 
 1. **No blanket scope.** Records authorizing "all external networks", wildcard
    CIDRs (`0.0.0.0/0`, `::/0`), wildcard TLDs (`*.com`), or unnamed SSIDs are

@@ -16,7 +16,9 @@ In short: no stubs, placeholders, `TODO`/`FIXME`, mock data, simulated tool
 output, or truncated code; full error handling and strict typing; real,
 executed actions only; and authorization-first execution for any offensive
 operation (never bypass `PolicyEngine::authorize()`, offline-by-default unless a
-signed engagement record permits egress).
+signed engagement record permits egress). In this repository the authorization
+point is the `PreToolUse` hook `.claude/hooks/policy_wrap.py`, which checks every
+Bash command against the records in `engagements/`.
 
 ## Quality gate
 

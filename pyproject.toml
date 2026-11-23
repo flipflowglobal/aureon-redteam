@@ -2,8 +2,9 @@
 #   tools/zero_toy_scan.py          Zero-Toy-Code scanner (repository gate)
 #   .claude/hooks/policy_wrap.py    PreToolUse authorization policy wrap
 # and their test suites. Both modules are standalone scripts with no
-# third-party runtime dependencies; the pinned development toolchain lives in
-# requirements-dev.txt. Settings follow the Engineering Standard, section 10.1.
+# third-party runtime dependencies; the pinned gate toolchain lives in
+# requirements-gate.txt (Termux) and requirements-dev.txt (glibc Linux). Settings
+# are the strictest available, per the Zero-Toy-Code standard in AGENTS.md.
 
 [tool.ruff]
 target-version = "py310"
@@ -65,7 +66,7 @@ testpaths = ["tools", ".claude/hooks"]
 addopts = ["--strict-markers", "--strict-config", "-ra", "--import-mode=prepend"]
 xfail_strict = true
 filterwarnings = ["error"]
-markers = ["integration: needs network or credentials; runs only in the integration job"]
+markers = ["integration: needs network or credentials; excluded from the offline gate"]
 
 [tool.coverage.run]
 branch = true

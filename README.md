@@ -34,7 +34,7 @@ Antigravity natively discovers agents and rules in two scopes:
 ### AGY Quick Start
 
 ```sh
-# Verify AGY plugin integrity and zero-toy-code compliance
+# Validate the AGY plugin manifest with agy
 ./setup.sh agy-validate
 
 # Install AGY plugin globally
@@ -114,8 +114,15 @@ call against the engagement model in [`engagements/`](engagements/README.md).
 It is **deny-by-default** and fails closed:
 
 - Non-offensive commands defer to Claude Code's normal permission flow.
-- Offensive tooling (`nmap`, `sqlmap`, `hydra`, …) and off-box egress against
-  loopback / RFC 5737 documentation ranges are allowed as local-testbed traffic.
+- Offensive tooling (`nmap`, `sqlmap`, `hydra`, …) and egress tools (`curl`,
+  `wget`, `nc`, …) are allowed without a record only against testbed targets:
+  loopback, the RFC 5737 documentation ranges, `localhost` / `*.localhost`, and
+  `*.example.com` / `*.example.net` / `*.example.org`. (Those reserved domains
+  are delegated and can resolve to public hosts; whether to keep them as testbed
+  names is an open owner decision.)
+- Engagement records are read from the project root Claude Code sets for the
+  hook (`CLAUDE_PROJECT_DIR`), never from the directory the session has changed
+  into, so a record outside this repository cannot authorize anything.
 - Against any other target, the operation is **denied** unless an engagement
   record is `status: active`, carries both internal and owner approval, is
   inside its validity window, enables network access, and explicitly lists the
@@ -123,17 +130,26 @@ It is **deny-by-default** and fails closed:
 - A CIDR target is checked over its full width: a sweep is authorized only when
   the whole range lies inside an authorized scope (or a documentation range for
   testbed traffic), never by its first address. IPv6 address literals are
-  targets like IPv4 ones.
+  targets like IPv4 ones, and numeric IPv4 spellings that the system resolver
+  accepts (32-bit decimal, hexadecimal, octal) are normalized and checked like
+  dotted-quad addresses.
 - Commands run indirectly are analysed too: a shell's `-c` argument, `eval`, and
   `$(…)`, `<(…)`, `>(…)` and backtick substitutions, up to 8 levels deep.
   Deeper nesting is denied.
-- Denial-of-service tooling and blanket scope (`0.0.0.0/0`, `::/0`) are denied
+- Denial-of-service tooling and blanket scope (any network with a zero-length
+  prefix, such as `0.0.0.0/0` or `::/0`, however it is spelled) are denied
   unconditionally and cannot be enabled by any record.
 - A malformed hook event, any internal fault (logged with an error ID), and an
   unreadable, oversized or malformed engagement record all fail closed. A bad
   record only disables itself; it is listed in denials and never disables the
   other records. Timestamps must carry a timezone, and `targets` /
-  `excluded_targets` must be lists of entries with a string `value`.
+  `excluded_targets` must be lists of entries with a string `value`. At most
+  64 KiB of a record is read.
+
+The wrap analyses command text. It does not see commands that another
+interpreter runs internally (for example `python -c` or `perl -e`) or the
+contents of script files, and it is enforced only under Claude Code: OpenCode
+and Antigravity have no equivalent hook.
 
 #### Local-network scope mode
 
@@ -153,7 +169,7 @@ authorize shared or public networks (café / hotel / office Wi-Fi) beyond device
 you are entitled to test.
 
 ```sh
-python3 -m pytest .claude/hooks/test_policy_wrap.py   # 188 tests, deterministic clock and network
+python3 -m pytest .claude/hooks/test_policy_wrap.py   # 205 tests, deterministic clock and network
 ```
 
 ---
@@ -208,7 +224,7 @@ production code itself stays on the standard library and supports Python 3.10+.
 | Lockfile (generated from the `.in` file by `uv pip compile --generate-hashes`) | Contents | Used on |
 |---|---|---|
 | `requirements-gate.txt` | mypy, pytest, pytest-cov, coverage, pip-audit, yamllint | Termux |
-| `requirements-dev.txt` | the above plus ruff and ShellCheck (`shellcheck-py`) | glibc Linux, macOS |
+| `requirements-dev.txt` | the above plus ruff and ShellCheck (`shellcheck-py`) | glibc Linux |
 
 `./setup.sh toolchain` picks the lockfile for the platform. mypy is pinned to
 1.18.2, the newest release with no native dependency (1.19+ needs a C extension
@@ -269,7 +285,7 @@ tools/test_sync_prompts.sh    # behavioural tests for the parity tooling
 
 ## Enterprise Zero-Toy-Code Standard
 
-All agents operate under the mandatory rules defined in [AGENTS.md](file:///data/data/com.termux/files/home/aureon-redteam/AGENTS.md):
+All agents operate under the mandatory rules defined in [AGENTS.md](AGENTS.md):
 
 - **No Placeholders or Stubs**: Zero tolerance for `TODO`, `FIXME`, `pass`, `...`, `todo!()`, `unimplemented!()`, or truncated code blocks.
 - **No Mock / Toy Data**: Real schemas, typed interfaces, and production bindings only.

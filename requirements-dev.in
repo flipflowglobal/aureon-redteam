@@ -1,4 +1,4 @@
-# Full gate toolchain for glibc and macOS hosts: the Python gate tools plus
+# Full gate toolchain for glibc Linux hosts: the Python gate tools plus
 # ruff and ShellCheck. On Termux, ruff and ShellCheck come from `pkg` instead
 # (no Android wheels exist for them), and only requirements-gate.txt is
 # installed. ruff is pinned to the version Termux packages so both platforms
