@@ -16,7 +16,7 @@
 #   ./setup.sh agy-validate           Validate AGY plugin manifest, agents, and rules
 #   ./setup.sh agy-status             Check AGY plugin and workspace configuration status
 #   ./setup.sh agy-uninstall          Uninstall global AGY plugin
-#   ./setup.sh claude-install [--force]  Install Claude Code agents+skills+policy wrap to ~/.claude
+#   ./setup.sh claude-install [--force]  Install Claude Code agents and skills to ~/.claude (hook stays project-scoped)
 #   ./setup.sh claude-status          Compare global Claude Code copies against this repo
 #   ./setup.sh claude-uninstall       Remove global Claude Code copies matching this repo
 #   ./setup.sh install [--force]      Install/sync opencode agents to global config dir
@@ -24,7 +24,7 @@
 #   ./setup.sh status                 Compare global opencode copies against this repo
 #   ./setup.sh uninstall              Remove global opencode copies matching this repo
 #   ./setup.sh all                    Install AGY plugin, Claude Code config, and opencode agents globally
-#   ./setup.sh toolchain              Build the hash-verified gate toolchain in .venv (Python 3.11+)
+#   ./setup.sh toolchain              Build the hash-verified gate toolchain in .venv (Python 3.11+, Termux too)
 #   ./setup.sh scan                   Run every offline gate (lint, types, tests, coverage, shell, secrets)
 #   ./setup.sh audit-deps             Audit the pinned toolchain for known vulnerabilities (network)
 #   ./setup.sh gate-install           Install the Zero-Toy-Code pre-commit hook (git core.hooksPath)
@@ -64,6 +64,17 @@ CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 die() { printf 'setup: %s\n' "$*" >&2; exit 1; }
 info() { printf '  %-12s %s\n' "$@"; }
 
+# Commands that install copies take at most one option, `--force`. Anything else
+# is a typo that would otherwise run the command without the intended option.
+check_force_option() {
+  if [[ "$#" -gt 1 ]]; then
+    die "unexpected arguments: $*"
+  fi
+  if [[ -n "${1:-}" && "${1}" != "--force" ]]; then
+    die "unknown option: ${1} (expected --force or nothing)"
+  fi
+}
+
 # Binary lookups always succeed and print the resolved path, or nothing when the
 # binary is absent. Callers test for an empty result, so the lookup is never
 # invoked in a condition where `set -e` would be suspended inside it.
@@ -98,7 +109,7 @@ require_agy_sources() {
 }
 
 validate_json() {
-  local bad=0
+  local bad=0 j
   for j in "${OPENCODE_SRC}"/*.json "${AGY_PLUGIN_SRC}"/*.json; do
     [[ -e "${j}" ]] || continue
     if python3 -m json.tool "${j}" >/dev/null 2>&1; then
@@ -425,16 +436,32 @@ cmd_all() {
 #
 # The enforcement point for the Enterprise Zero-Toy-Code standard (AGENTS.md).
 # `scan` runs every offline gate, reports each result, and exits non-zero when
-# any gate fails or a required tool is missing, so a commit or CI run is
-# blocked instead of passing with a gate silently skipped. Tools resolve from
-# the hash-pinned toolchain in .venv (`./setup.sh toolchain`) first, then PATH.
-# `audit-deps` needs the network to reach the vulnerability service, so CI runs
-# it separately and the pre-commit hook stays offline.
+# any gate fails or a required tool is missing, so a commit is blocked instead
+# of passing with a gate silently skipped. Tools resolve from the hash-pinned
+# toolchain in .venv (`./setup.sh toolchain`) first, then PATH. `audit-deps`
+# needs the network to reach the vulnerability service, so it is a separate
+# command and the pre-commit hook stays offline.
 
 SCAN_TOOL="${REPO_ROOT}/tools/zero_toy_scan.py"
 VENV_DIR="${REPO_ROOT}/.venv"
 REQUIREMENTS_DEV="${REPO_ROOT}/requirements-dev.txt"
+REQUIREMENTS_GATE="${REPO_ROOT}/requirements-gate.txt"
 GATE_FAILURES=0
+
+# Termux (Android) has no wheels for ruff or ShellCheck, so there they come from
+# `pkg` and the toolchain installs only the Python gate tools.
+ON_TERMUX=0
+if [[ -n "${TERMUX_VERSION:-}" || "${PREFIX:-}" == */com.termux/files/usr ]]; then
+  ON_TERMUX=1
+fi
+TOOLCHAIN_LOCK="${REQUIREMENTS_DEV}"
+SYSTEM_TOOLS=(gitleaks)
+SYSTEM_TOOLS_HINT="apt-get install gitleaks, or brew install gitleaks"
+if [[ "${ON_TERMUX}" -eq 1 ]]; then
+  TOOLCHAIN_LOCK="${REQUIREMENTS_GATE}"
+  SYSTEM_TOOLS=(ruff shellcheck gitleaks)
+  SYSTEM_TOOLS_HINT="pkg install ruff shellcheck gitleaks"
+fi
 
 # Print the path of a gate tool: the .venv toolchain first, then PATH. Prints
 # nothing when the tool is unavailable.
@@ -492,12 +519,55 @@ gate_tool_run() {
 }
 
 # Print the commit that diff-based gates compare against: the merge base with
-# origin/main when that ref exists (CI, fetched clones), otherwise HEAD.
+# origin/main when that ref exists (fetched clones), otherwise HEAD.
 diff_base() {
   if git rev-parse --verify --quiet origin/main >/dev/null; then
     git merge-base origin/main HEAD
   else
     printf 'HEAD\n'
+  fi
+}
+
+# Warn when the ruff in use is not the pinned version: a different ruff can
+# format or lint differently under `select = ["ALL"]`.
+warn_unpinned_ruff() {
+  local bin pinned actual
+  bin="$(gate_tool ruff)"
+  pinned="$(sed -n 's/^ruff==//p' "${REPO_ROOT}/requirements-dev.in")"
+  [[ -n "${bin}" && -n "${pinned}" ]] || return 0
+  # An unreadable version skips the warning; the ruff gates still run and fail.
+  if ! actual="$("${bin}" --version)"; then
+    return 0
+  fi
+  if [[ "${actual}" != "ruff ${pinned}" ]]; then
+    info "warning" "${actual} differs from the pinned ruff ${pinned}; results may differ"
+  fi
+}
+
+# Run gitleaks over history and the working tree. gitleaks 8.19+ provides the
+# `git` and `dir` commands; older 8.x releases (Ubuntu 24.04 packages 8.16,
+# whose `version` output has no number) only have `detect`.
+gate_gitleaks() {
+  local bin version
+  bin="$(gate_tool gitleaks)"
+  if [[ -z "${bin}" ]]; then
+    gate_missing "gitleaks: history" gitleaks
+    gate_missing "gitleaks: working tree" gitleaks
+    return 0
+  fi
+  # A version that cannot be read is treated as pre-8.19: `detect` exists in
+  # every 8.x release.
+  if ! version="$("${bin}" version)"; then
+    version=""
+  fi
+  if [[ "${version}" =~ ^v?8\.(19|[2-9][0-9])\. || "${version}" =~ ^v?(9|[1-9][0-9]+)\. ]]; then
+    gate_run "gitleaks: history" "${bin}" git --config .gitleaks.toml --redact --no-banner .
+    gate_run "gitleaks: working tree" "${bin}" dir --config .gitleaks.toml --redact --no-banner .
+  else
+    gate_run "gitleaks: history" "${bin}" detect --source . \
+      --config .gitleaks.toml --redact --no-banner
+    gate_run "gitleaks: working tree" "${bin}" detect --no-git --source . \
+      --config .gitleaks.toml --redact --no-banner
   fi
 }
 
@@ -508,12 +578,18 @@ cmd_scan() {
   cd "${REPO_ROOT}"
   GATE_FAILURES=0
 
-  local base scripts_list py
-  local -a scripts
+  # Engagement records are excluded from yamllint until their owner decides on
+  # reformatting them (they are authorization records).
+  local base scripts_list yaml_list py
+  local -a scripts yaml_files
   base="$(diff_base)"
   scripts_list="$(git ls-files --cached --others --exclude-standard -- '*.sh' '.githooks/*')"
   mapfile -t scripts <<<"${scripts_list}"
+  yaml_list="$(git ls-files --cached --others --exclude-standard -- \
+    '*.yml' '*.yaml' ':!:engagements/*')"
+  mapfile -t yaml_files <<<"${yaml_list}"
   py="$(gate_python)"
+  warn_unpinned_ruff
 
   gate_run "zero-toy scanner" python3 "${SCAN_TOOL}"
   gate_run "whitespace and conflict markers since ${base}" git diff --check "${base}"
@@ -522,20 +598,16 @@ cmd_scan() {
   gate_tool_run "mypy strict" mypy
   if [[ -n "${py}" ]]; then
     gate_run "pytest with 100% branch coverage" "${py}" -m pytest -q \
-      --cov --cov-report=term-missing --cov-report=xml
+      --cov --cov-report=term-missing
   else
     gate_missing "pytest with 100% branch coverage" "pytest with pytest-cov"
   fi
   gate_tool_run "ShellCheck (all checks)" shellcheck "${scripts[@]}"
   gate_run "setup.sh suite" bash tools/test_setup.sh
   gate_run "prompt-sync suite" bash tools/test_sync_prompts.sh
-  gate_run "agent prompt parity" tools/sync_prompts.sh check
-  gate_tool_run "actionlint" actionlint
-  gate_tool_run "yamllint (strict)" yamllint --strict .github .yamllint.yaml
-  gate_tool_run "gitleaks: history" gitleaks detect --source . \
-    --config .gitleaks.toml --redact --no-banner
-  gate_tool_run "gitleaks: working tree" gitleaks detect --no-git --source . \
-    --config .gitleaks.toml --redact --no-banner
+  gate_run "agent prompt parity" bash tools/sync_prompts.sh check
+  gate_tool_run "yamllint (strict)" yamllint --strict "${yaml_files[@]}"
+  gate_gitleaks
 
   if [[ "${GATE_FAILURES}" -ne 0 ]]; then
     die "Zero-Toy-Code gate failed: ${GATE_FAILURES} gate(s)"
@@ -544,7 +616,7 @@ cmd_scan() {
 }
 
 cmd_toolchain() {
-  [[ -f "${REQUIREMENTS_DEV}" ]] || die "missing ${REQUIREMENTS_DEV}"
+  [[ -f "${TOOLCHAIN_LOCK}" ]] || die "missing ${TOOLCHAIN_LOCK}"
   command -v python3 >/dev/null 2>&1 || die "python3 is required to build the toolchain"
   python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))' \
     || die "the gate toolchain needs Python 3.11 or later"
@@ -552,13 +624,19 @@ cmd_toolchain() {
     info "creating" "${VENV_DIR}"
     python3 -m venv "${VENV_DIR}"
   fi
-  info "installing" "hash-verified toolchain from requirements-dev.txt"
-  "${VENV_DIR}/bin/python" -m pip install --disable-pip-version-check --quiet \
-    --require-hashes -r "${REQUIREMENTS_DEV}"
+  info "installing" "hash-verified toolchain from ${TOOLCHAIN_LOCK##*/}"
+  # msgpack (needed by pip-audit) has no Termux wheel; MSGPACK_PUREPYTHON makes
+  # its source build pure Python, so no C compiler is needed.
+  MSGPACK_PUREPYTHON=1 "${VENV_DIR}/bin/python" -m pip install \
+    --disable-pip-version-check --quiet --require-hashes -r "${TOOLCHAIN_LOCK}"
   info "ready" "${VENV_DIR}"
-  if ! command -v gitleaks >/dev/null 2>&1; then
-    info "note" "gitleaks is not on PATH; install it with the system package manager"
-    info "" "(apt-get install gitleaks, pkg install gitleaks, or brew install gitleaks)"
+  local tool
+  local -a missing=()
+  for tool in "${SYSTEM_TOOLS[@]}"; do
+    command -v "${tool}" >/dev/null 2>&1 || missing+=("${tool}")
+  done
+  if [[ "${#missing[@]}" -gt 0 ]]; then
+    info "missing" "${missing[*]} (install with: ${SYSTEM_TOOLS_HINT})"
   fi
 }
 
@@ -566,8 +644,8 @@ cmd_audit_deps() {
   local bin
   bin="$(gate_tool pip-audit)"
   [[ -n "${bin}" ]] || die "pip-audit is not installed (run ./setup.sh toolchain)"
-  info "audit" "requirements-dev.txt against the PyPI vulnerability service"
-  "${bin}" --strict --require-hashes --disable-pip -r "${REQUIREMENTS_DEV}"
+  info "audit" "${TOOLCHAIN_LOCK##*/} against the PyPI vulnerability service"
+  "${bin}" --strict --require-hashes --disable-pip -r "${TOOLCHAIN_LOCK}"
 }
 
 cmd_gate_install() {
@@ -588,14 +666,14 @@ case "${1:-}" in
   agy-validate)     cmd_agy_validate;;
   agy-status)       cmd_agy_status;;
   agy-uninstall)    cmd_agy_uninstall;;
-  claude-install)   cmd_claude_install "${2:-}";;
+  claude-install)   shift; check_force_option "$@"; cmd_claude_install "${1:-}";;
   claude-status)    cmd_claude_status;;
   claude-uninstall) cmd_claude_uninstall;;
-  install)          cmd_install "${2:-}";;
+  install)          shift; check_force_option "$@"; cmd_install "${1:-}";;
   open)             shift; cmd_open "$@";;
   status)           cmd_status;;
   uninstall)        cmd_uninstall;;
-  all)              cmd_all "${2:-}";;
+  all)              shift; check_force_option "$@"; cmd_all "${1:-}";;
   scan)             cmd_scan;;
   toolchain)        cmd_toolchain;;
   audit-deps)       cmd_audit_deps;;

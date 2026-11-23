@@ -11,7 +11,7 @@ Run: python3 -m pytest .claude/hooks/test_policy_wrap.py
 from __future__ import annotations
 
 import dataclasses
-import datetime as _dt
+import datetime as dt
 import io
 import ipaddress
 import json
@@ -29,7 +29,7 @@ import pytest
 
 HOOK = Path(__file__).with_name("policy_wrap.py")
 REPO_EXAMPLE = Path(__file__).parents[2] / "engagements" / "engagement.example.yaml"
-FIXED_NOW = _dt.datetime(2026, 6, 15, 12, 0, tzinfo=_dt.timezone.utc)
+FIXED_NOW = dt.datetime(2026, 6, 15, 12, 0, tzinfo=dt.timezone.utc)
 REAL_NOW_UTC = pw.now_utc
 REAL_INTERFACE_NETWORKS = pw.interface_networks
 REAL_PROBED_NETWORKS = pw.probed_networks
@@ -361,6 +361,95 @@ def test_ipv6_target_under_active_record_is_checked(
     assert decision("nmap -6 ::1", root) == "allow"
 
 
+# --- regression: numeric IPv4 spellings are targets ---------------------------------
+
+
+def numeric_spellings(address: str) -> tuple[str, str]:
+    """Return the 32-bit decimal and hexadecimal spellings of ``address``."""
+    value = int.from_bytes(socket.inet_aton(address), "big")
+    return str(value), hex(value)
+
+
+@pytest.mark.parametrize(
+    ("token", "expected"),
+    [
+        (numeric_spellings("192.0.2.10")[0], "192.0.2.10"),
+        (numeric_spellings("192.0.2.10")[1], "192.0.2.10"),
+        ("22", None),
+        ("8080", None),
+        ("1.2.3.4.5", None),
+        ("99999999999", None),
+        ("host.example", None),
+    ],
+)
+def test_legacy_ipv4(token: str, expected: str | None) -> None:
+    assert pw.legacy_ipv4(token) == expected
+
+
+@pytest.mark.parametrize("spelling", numeric_spellings("198.18.0.10"))
+def test_numeric_spelling_of_remote_host_is_gated(
+    tmp_path: Path, spelling: str
+) -> None:
+    assert pw.classify(f"curl {spelling}").targets == ("198.18.0.10",)
+    assert decision(f"curl {spelling}", tmp_path) == "deny"
+    root = project(
+        tmp_path, ("r.yaml", dataclasses.replace(EXPLICIT, targets="").text())
+    )
+    verdict, reason = run_hook(bash_event(f"nmap {spelling}", root))
+    assert verdict == "deny"
+    assert "198.18.0.10" in reason
+
+
+def test_numeric_spelling_of_loopback_stays_local(tmp_path: Path) -> None:
+    loopback = numeric_spellings("127.0.0.1")[0]
+    assert pw.classify(f"curl http://{loopback}:8080/").targets == ("127.0.0.1",)
+    assert decision(f"curl http://{loopback}:8080/", tmp_path) == "defer"
+
+
+def test_port_numbers_are_not_targets(tmp_path: Path) -> None:
+    assert pw.classify("nmap -p 22 127.0.0.1").targets == ("127.0.0.1",)
+    assert decision("nmap -p 8080 127.0.0.1", tmp_path) == "allow"
+
+
+# --- regression: blanket scope in any spelling ---------------------------------------
+
+ZERO_PREFIX_V6 = ("::" + "0/0", "0::" + "/0")
+
+
+@pytest.mark.parametrize("spelling", ZERO_PREFIX_V6)
+def test_zero_prefix_spelling_is_forbidden(tmp_path: Path, spelling: str) -> None:
+    assert pw.classify(f"masscan {spelling}").kind == "forbidden"
+    assert decision(f"masscan {spelling}", tmp_path) == "deny"
+
+
+@pytest.mark.parametrize("spelling", ZERO_PREFIX_V6)
+def test_record_with_zero_prefix_spelling_is_rejected(spelling: str) -> None:
+    spec = dataclasses.replace(
+        EXPLICIT,
+        targets=f'targets:\n  - type: cidr\n    value: "{spelling}"\n',
+    )
+    assert evaluate(spec.text()) == "record contains a forbidden wildcard target"
+
+
+# --- regression: records come from the project root, not the session cwd ------------
+
+
+def test_records_in_session_cwd_are_ignored_when_project_root_is_set(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trusted = tmp_path / "project"
+    trusted.mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    elsewhere = project(tmp_path / "elsewhere", ("own.yaml", EXPLICIT.text()))
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(trusted))
+    verdict, reason = run_hook(bash_event("nmap 198.18.0.10", elsewhere))
+    assert verdict == "deny"
+    assert "no active engagement record" in reason
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(elsewhere))
+    assert decision("nmap 198.18.0.10", trusted) == "allow"
+
+
 # --- regression: malformed events fail closed -----------------------------------
 
 
@@ -388,7 +477,7 @@ def test_event_for_another_tool_defers() -> None:
     )
 
 
-def test_project_dir_falls_back_to_environment_then_cwd(
+def test_project_dir_is_project_root_then_process_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -518,6 +607,12 @@ def test_deeply_nested_record_is_rejected(tmp_path: Path) -> None:
     assert engagement.rejection == (
         f"record nests deeper than {pw.MAX_RECORD_NESTING} levels"
     )
+
+
+def test_record_read_is_bounded() -> None:
+    # /dev/zero never ends: an unbounded read would never return.
+    engagement = pw.load_engagement(Path("/dev/zero"), FIXED_NOW)
+    assert engagement.rejection == f"record exceeds {pw.MAX_RECORD_BYTES} bytes"
 
 
 def test_unreadable_record_is_rejected(tmp_path: Path) -> None:
@@ -670,7 +765,7 @@ def test_record_mode(line: str, mode: str) -> None:
 
 
 def test_real_clock_is_timezone_aware() -> None:
-    assert REAL_NOW_UTC().tzinfo is _dt.timezone.utc
+    assert REAL_NOW_UTC().tzinfo is dt.timezone.utc
 
 
 # --- decisions ------------------------------------------------------------------

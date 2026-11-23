@@ -20,9 +20,34 @@ failures=0
 pass() { printf '  ok           %s\n' "$1"; }
 fail() { printf '  FAIL         %s\n' "$1" >&2; failures=$((failures + 1)); }
 
+# The sandbox PATH must hide agy and opencode while keeping every tool setup.sh
+# runs, wherever the platform keeps them. It is two parts:
+#  1. a directory of links to exactly those tools, resolved from the caller's
+#     PATH, so they stay reachable even when agy or opencode shares their
+#     directory (Termux installs everything into $PREFIX/bin);
+#  2. the caller's PATH minus every directory that provides agy or opencode, so
+#     a wrapper on PATH (for example a guard around rm) still finds the binary
+#     it delegates to.
+sandbox_bin="${work}/sandbox-bin"
+mkdir -p "${sandbox_bin}"
+for tool in bash python3 awk sed cmp cp mkdir rm diff basename dirname chmod cat env grep tr; do
+  if ! tool_path="$(type -P "${tool}")"; then
+    printf 'test_setup: required tool not on PATH: %s\n' "${tool}" >&2
+    exit 2
+  fi
+  ln -s "${tool_path}" "${sandbox_bin}/${tool}"
+done
+base_path="${sandbox_bin}"
+IFS=':' read -r -a path_dirs <<<"${PATH}"
+for dir in "${path_dirs[@]}"; do
+  if [[ -n "${dir}" && ! -x "${dir}/agy" && ! -x "${dir}/opencode" ]]; then
+    base_path="${base_path}:${dir}"
+  fi
+done
+sandbox_path="${base_path}"
+
 # Run setup.sh inside the sandbox with the given arguments; stdout and stderr
 # go to ${work}/out, and the exit status is compared with the expected one.
-sandbox_path="/usr/local/bin:/usr/bin:/bin"
 expect_exit() {
   local want="$1" label="$2" got=0 output
   shift 2
@@ -111,7 +136,7 @@ fi
 printf '%s\n' "$@" >"${OPENCODE_ARGS_FILE}"
 RECORDER
 chmod +x "${work}/bin/opencode"
-sandbox_path="${work}/bin:/usr/local/bin:/usr/bin:/bin"
+sandbox_path="${work}/bin:${base_path}"
 export OPENCODE_ARGS_FILE="${work}/opencode-args"
 expect_exit 0 "open --no-install launches opencode" open --no-install --model test-model
 forwarded="$(tr '\n' ' ' <"${OPENCODE_ARGS_FILE}")"
@@ -121,7 +146,7 @@ else
   fail "open forwarded: ${forwarded}"
 fi
 expect_output "open reports the opencode version" "opencode 0.0.0-test"
-sandbox_path="/usr/local/bin:/usr/bin:/bin"
+sandbox_path="${base_path}"
 expect_exit 1 "open without opencode on PATH fails" open --no-install
 
 # --- dispatcher ---------------------------------------------------------------
@@ -129,6 +154,14 @@ expect_exit 0 "--help exits 0" --help
 expect_output "--help prints the usage block" "^Usage:"
 expect_output "--help lists the scan command" "setup.sh scan"
 expect_exit 2 "an unknown command exits 2" no-such-command
+
+# --- option validation: a typo must not run the command without the option ----
+expect_exit 1 "install rejects an unknown option" install --forse
+expect_output "the rejection names the option" "unknown option: --forse"
+expect_exit 1 "claude-install rejects an unknown option" claude-install --nope
+expect_exit 1 "all rejects extra arguments" all --force extra
+expect_exit 0 "install accepts --force" install --force
+expect_exit 0 "claude-install accepts --force" claude-install --force
 
 if [[ "${failures}" -ne 0 ]]; then
   printf '\n%d test failure(s)\n' "${failures}" >&2

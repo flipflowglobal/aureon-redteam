@@ -1,0 +1,18 @@
+# Python gate tools that install on every supported platform, Termux included,
+# without a Rust toolchain. The production code (tools/zero_toy_scan.py,
+# .claude/hooks/policy_wrap.py) uses only the Python standard library.
+#
+# mypy is pinned to 1.18.2, the newest release with no native dependency:
+# 1.19+ needs librt (a C extension) and 2.x also needs ast-serialize (Rust), and
+# Termux, whose Python is not glibc-based, can install neither from a wheel.
+# 1.18.2 enforces this repository's strict configuration identically.
+#
+# Regenerate the hash-pinned lockfile after editing this file:
+#   uv pip compile requirements-gate.in --universal --python-version 3.11 \
+#     --generate-hashes --output-file requirements-gate.txt
+mypy==1.18.2
+pytest==9.1.1
+pytest-cov==7.1.0
+coverage==7.17.4
+pip-audit==2.10.1
+yamllint==1.38.0

@@ -38,7 +38,7 @@ each record capped at ``MAX_RECORD_BYTES``.
 
 from __future__ import annotations
 
-import datetime as _dt
+import datetime as dt
 import ipaddress
 import json
 import logging
@@ -149,6 +149,9 @@ _TRAILING_WRAPPERS_RE: Final = re.compile(r"(?:\)|\}|`)+$")
 _SUBSTITUTION_OPENERS: Final = ("$(", "<(", ">(")
 _SUBSTITUTION_OPENER_LENGTH: Final = 2
 _SUBNET_SPLIT_RE: Final = re.compile(r"[,\s]+")
+_NUMERIC_HOST_RE: Final = re.compile(
+    r"^(?:0[xX][0-9A-Fa-f]+|[0-9]+)(?:\.(?:0[xX][0-9A-Fa-f]+|[0-9]+)){0,3}$",
+)
 _INET_RE: Final = re.compile(r"\binet6?\s+([0-9A-Fa-f:.]+/\d+)")
 _WILDCARD_TARGETS: Final = frozenset({"0.0.0.0/0", "::/0", "*", "0/0"})
 _LOCAL_MODE_NAMES: Final = frozenset({"local_network", "local-network", "lan"})
@@ -277,7 +280,7 @@ class _RecordParser:
 
     lines: list[tuple[int, str]]
     position: int = 0
-    depth: int = field(default=0)
+    depth: int = 0
 
     def parse(self) -> Record:
         """Return the record's top-level mapping.
@@ -398,9 +401,9 @@ def parse_engagement(text: str) -> Record:
 # --- authorization evaluation -------------------------------------------------
 
 
-def now_utc() -> _dt.datetime:
+def now_utc() -> dt.datetime:
     """Return the current UTC time; tests replace it to pin the clock."""
-    return _dt.datetime.now(_dt.timezone.utc)
+    return dt.datetime.now(dt.timezone.utc)
 
 
 def _mapping(value: YamlValue) -> Record:
@@ -408,15 +411,21 @@ def _mapping(value: YamlValue) -> Record:
     return value if isinstance(value, dict) else {}
 
 
-def _parse_timestamp(value: YamlValue) -> _dt.datetime | None:
+def _parse_timestamp(value: YamlValue) -> dt.datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
     # A naive timestamp cannot be ordered against the UTC clock.
     return parsed if parsed.tzinfo is not None else None
+
+
+def _is_blanket_network(value: str) -> bool:
+    """True iff ``value`` is a network with a zero-length prefix, in any spelling."""
+    network = as_network(value.strip())
+    return network is not None and network.prefixlen == 0
 
 
 def _is_wildcard_target(value: str) -> bool:
@@ -425,6 +434,7 @@ def _is_wildcard_target(value: str) -> bool:
         lowered in _WILDCARD_TARGETS
         or lowered.startswith("*.")
         or "all" in lowered.split()
+        or _is_blanket_network(lowered)
     )
 
 
@@ -458,7 +468,7 @@ def _approval_failure(record: Record) -> str | None:
     return None
 
 
-def _window_failure(record: Record, now: _dt.datetime) -> str | None:
+def _window_failure(record: Record, now: dt.datetime) -> str | None:
     window = _mapping(record.get("time_window"))
     start = _parse_timestamp(window.get("valid_from"))
     end = _parse_timestamp(window.get("valid_until"))
@@ -481,7 +491,7 @@ def _network_failure(record: Record) -> str | None:
 def _authorization_failure(
     record: Record,
     targets: Sequence[str],
-    now: _dt.datetime,
+    now: dt.datetime,
 ) -> str | None:
     if str(record.get("status", "")).lower() != "active":
         return "record status is not 'active'"
@@ -506,7 +516,7 @@ def _rejected(source: str, reason: str) -> Engagement:
     return Engagement(source, "explicit", (), (), reason)
 
 
-def evaluate_record(source: str, record: Record, now: _dt.datetime) -> Engagement:
+def evaluate_record(source: str, record: Record, now: dt.datetime) -> Engagement:
     """Validate one parsed engagement record at time ``now``.
 
     Args:
@@ -531,10 +541,15 @@ def evaluate_record(source: str, record: Record, now: _dt.datetime) -> Engagemen
     )
 
 
-def load_engagement(path: Path, now: _dt.datetime) -> Engagement:
-    """Load one record; any read, size, decode or parse failure rejects it."""
+def load_engagement(path: Path, now: dt.datetime) -> Engagement:
+    """Load one record; any read, size, decode or parse failure rejects it.
+
+    At most ``MAX_RECORD_BYTES + 1`` bytes are read, so an oversized file is
+    rejected without being loaded into memory.
+    """
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_RECORD_BYTES + 1)
     except OSError as error:
         return _rejected(path.name, f"unreadable record ({error.strerror or error})")
     if len(raw) > MAX_RECORD_BYTES:
@@ -548,7 +563,7 @@ def load_engagement(path: Path, now: _dt.datetime) -> Engagement:
     return evaluate_record(path.name, record, now)
 
 
-def load_engagements(project_dir: Path, now: _dt.datetime) -> list[Engagement]:
+def load_engagements(project_dir: Path, now: dt.datetime) -> list[Engagement]:
     """Load every engagement record under ``project_dir/engagements``.
 
     The template ``engagement.example.yaml`` is skipped: it authorizes nothing.
@@ -857,17 +872,39 @@ class CommandAnalyzer:
         return self.commands
 
 
+def legacy_ipv4(token: str) -> str | None:
+    """Return the dotted-quad form of a numeric IPv4 spelling, or ``None``.
+
+    The C resolver used by network tools (``inet_aton``) also accepts 32-bit
+    decimal, hexadecimal, octal and shortened forms that ``ipaddress`` rejects,
+    so such a host must still be recognized as a target. A result inside
+    ``0.0.0.0/8`` is ignored: that is where a bare port or count such as ``22``
+    lands, and it is not a routable destination.
+    """
+    if not _NUMERIC_HOST_RE.match(token):
+        return None
+    try:
+        address = socket.inet_ntoa(socket.inet_aton(token))
+    except OSError:
+        return None
+    return None if address.startswith("0.") else address
+
+
 def _token_target(token: str) -> str | None:
     """Return the network target a token names, or ``None``.
 
     Address literals (IPv4 and IPv6) and CIDRs are kept whole, so a CIDR is
-    checked over its full width rather than by its first address.
+    checked over its full width rather than by its first address. Numeric
+    IPv4 spellings are normalized to dotted-quad form, in URLs too.
     """
     url = _URL_RE.search(token)
     if url:
-        return url.group(1)
+        return legacy_ipv4(url.group(1)) or url.group(1)
     if _as_ip(token) is not None or ("/" in token and as_network(token)):
         return token
+    legacy = legacy_ipv4(token)
+    if legacy is not None:
+        return legacy
     host = token.split("://", 1)[-1].split("/", 1)[0].split(":", 1)[0]
     if _as_ip(host) is not None or _HOSTISH_RE.match(host):
         return host
@@ -886,10 +923,16 @@ def _extract_targets(tokens: Iterable[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(targets))
 
 
-def _forbidden_reason(command: str, binaries: set[str]) -> str | None:
+def _forbidden_reason(
+    command: str,
+    binaries: set[str],
+    targets: Sequence[str],
+) -> str | None:
     if binaries & _FORBIDDEN_BINS or any(flag in command for flag in _FLOOD_FLAGS):
         return "denial-of-service tooling"
-    if any(scope in command for scope in _BLANKET_SCOPES):
+    if any(scope in command for scope in _BLANKET_SCOPES) or any(
+        _is_blanket_network(target) for target in targets
+    ):
         return "blanket/wildcard network scope"
     return None
 
@@ -897,7 +940,7 @@ def _forbidden_reason(command: str, binaries: set[str]) -> str | None:
 def _classify_tokens(command: str, tokens: Sequence[str]) -> Classification:
     binaries = {_base(token) for token in tokens if not token.startswith("-")}
     targets = _extract_targets(tokens)
-    forbidden = _forbidden_reason(command, binaries)
+    forbidden = _forbidden_reason(command, binaries, targets)
     if forbidden is not None:
         return Classification("forbidden", targets, forbidden)
     if binaries & _OFFENSIVE_BINS:
@@ -1074,11 +1117,12 @@ def parse_event(raw: str) -> BashCall | None:
     if not isinstance(command, str):
         message = "Bash event has no string tool_input.command"
         raise MalformedEventError(message)
+    # Engagement records are authorization: read them from the project root
+    # Claude Code sets for project hooks, never from wherever the session has
+    # changed directory to. The event's cwd is used only when no root is set.
     cwd: object = event.get("cwd")
-    project = (
-        cwd
-        if isinstance(cwd, str) and cwd
-        else os.environ.get("CLAUDE_PROJECT_DIR") or str(Path.cwd())
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or (
+        cwd if isinstance(cwd, str) and cwd else str(Path.cwd())
     )
     return BashCall(command=command, project_dir=Path(project))
 
