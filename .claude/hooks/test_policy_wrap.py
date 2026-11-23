@@ -11,7 +11,7 @@ Run: python3 -m pytest .claude/hooks/test_policy_wrap.py
 from __future__ import annotations
 
 import dataclasses
-import datetime as _dt
+import datetime as dt
 import io
 import ipaddress
 import json
@@ -29,7 +29,7 @@ import pytest
 
 HOOK = Path(__file__).with_name("policy_wrap.py")
 REPO_EXAMPLE = Path(__file__).parents[2] / "engagements" / "engagement.example.yaml"
-FIXED_NOW = _dt.datetime(2026, 6, 15, 12, 0, tzinfo=_dt.timezone.utc)
+FIXED_NOW = dt.datetime(2026, 6, 15, 12, 0, tzinfo=dt.timezone.utc)
 REAL_NOW_UTC = pw.now_utc
 REAL_INTERFACE_NETWORKS = pw.interface_networks
 REAL_PROBED_NETWORKS = pw.probed_networks
@@ -670,7 +670,7 @@ def test_record_mode(line: str, mode: str) -> None:
 
 
 def test_real_clock_is_timezone_aware() -> None:
-    assert REAL_NOW_UTC().tzinfo is _dt.timezone.utc
+    assert REAL_NOW_UTC().tzinfo is dt.timezone.utc
 
 
 # --- decisions ------------------------------------------------------------------

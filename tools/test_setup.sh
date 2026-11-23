@@ -20,9 +20,21 @@ failures=0
 pass() { printf '  ok           %s\n' "$1"; }
 fail() { printf '  FAIL         %s\n' "$1" >&2; failures=$((failures + 1)); }
 
+# The sandbox PATH is the caller's PATH minus every directory that provides agy
+# or opencode. Deriving it, instead of hard-coding /usr/bin, keeps bash, python3
+# and coreutils reachable wherever the platform installs them (Termux uses
+# $PREFIX/bin and has no /usr/bin).
+base_path=""
+IFS=':' read -r -a path_dirs <<<"${PATH}"
+for dir in "${path_dirs[@]}"; do
+  if [[ -n "${dir}" && ! -x "${dir}/agy" && ! -x "${dir}/opencode" ]]; then
+    base_path="${base_path:+${base_path}:}${dir}"
+  fi
+done
+sandbox_path="${base_path}"
+
 # Run setup.sh inside the sandbox with the given arguments; stdout and stderr
 # go to ${work}/out, and the exit status is compared with the expected one.
-sandbox_path="/usr/local/bin:/usr/bin:/bin"
 expect_exit() {
   local want="$1" label="$2" got=0 output
   shift 2
@@ -111,7 +123,7 @@ fi
 printf '%s\n' "$@" >"${OPENCODE_ARGS_FILE}"
 RECORDER
 chmod +x "${work}/bin/opencode"
-sandbox_path="${work}/bin:/usr/local/bin:/usr/bin:/bin"
+sandbox_path="${work}/bin:${base_path}"
 export OPENCODE_ARGS_FILE="${work}/opencode-args"
 expect_exit 0 "open --no-install launches opencode" open --no-install --model test-model
 forwarded="$(tr '\n' ' ' <"${OPENCODE_ARGS_FILE}")"
@@ -121,7 +133,7 @@ else
   fail "open forwarded: ${forwarded}"
 fi
 expect_output "open reports the opencode version" "opencode 0.0.0-test"
-sandbox_path="/usr/local/bin:/usr/bin:/bin"
+sandbox_path="${base_path}"
 expect_exit 1 "open without opencode on PATH fails" open --no-install
 
 # --- dispatcher ---------------------------------------------------------------

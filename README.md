@@ -178,7 +178,8 @@ python3 tools/zero_toy_scan.py PATH [PATH]    # scan specific files or directori
 
 `./setup.sh scan` runs every offline gate, reports each result, and exits
 non-zero if any gate fails **or a required tool is missing** — no gate is ever
-skipped silently. The pre-commit hook and CI both run it.
+skipped silently. There is no hosted CI: run it locally (on Termux too), and
+let the pre-commit hook run it before every commit.
 
 | Gate | Tool and configuration |
 |---|---|
@@ -191,22 +192,28 @@ skipped silently. The pre-commit hook and CI both run it.
 | Shell | ShellCheck with every optional check enabled (`.shellcheckrc`) |
 | Shell suites | `tools/test_setup.sh` (sandboxed HOME), `tools/test_sync_prompts.sh` |
 | Prompt parity | `tools/sync_prompts.sh check` |
-| Workflow | `actionlint` |
-| YAML | `yamllint --strict` (`.yamllint.yaml`, default rules) |
+| YAML | `yamllint --strict` over every tracked YAML file except `engagements/` (`.yamllint.yaml`, default rules) |
 | Secrets | `gitleaks` over history and the working tree (`.gitleaks.toml`, default rules) |
 
 `./setup.sh audit-deps` checks the pinned toolchain against the PyPI
-vulnerability service with `pip-audit --strict`. It needs the network, so CI
-runs it as a separate job and the pre-commit hook stays offline.
+vulnerability service with `pip-audit --strict`. It needs the network, so it
+is a separate command and the pre-commit hook stays offline.
 
 ### Toolchain
 
-The gate tools are pinned with sha256 hashes in `requirements-dev.txt`
-(generated from `requirements-dev.in` by `uv pip compile --generate-hashes`)
-and installed with `pip install --require-hashes` into `.venv`. They need
-Python 3.11+; the production code itself stays on the standard library and
-supports Python 3.10+. gitleaks is not on PyPI: install it with the system
-package manager.
+The gate tools are pinned with sha256 hashes and installed with
+`pip install --require-hashes` into `.venv`. They need Python 3.11+; the
+production code itself stays on the standard library and supports Python 3.10+.
+
+| Lockfile (generated from the `.in` file by `uv pip compile --generate-hashes`) | Contents | Used on |
+|---|---|---|
+| `requirements-gate.txt` | mypy, pytest, pytest-cov, coverage, pip-audit, yamllint | Termux |
+| `requirements-dev.txt` | the above plus ruff and ShellCheck (`shellcheck-py`) | glibc Linux, macOS |
+
+`./setup.sh toolchain` picks the lockfile for the platform. mypy is pinned to
+1.18.2, the newest release with no native dependency (1.19+ needs a C extension
+and 2.x a Rust one, and neither has a Termux wheel). ruff is pinned to the
+version Termux packages, and `scan` warns when the ruff in use differs.
 
 ```sh
 ./setup.sh toolchain       # build the hash-verified toolchain in .venv
@@ -215,13 +222,29 @@ package manager.
 ./setup.sh gate-install    # run `scan` before every commit (git core.hooksPath)
 ```
 
-CI ([`.github/workflows/zero-toy-code.yml`](.github/workflows/zero-toy-code.yml))
-runs `scan` and `audit-deps` on every push and pull request with read-only
-permissions, unpersisted checkout credentials, job timeouts, and third-party
-actions pinned to commit SHAs. On pull requests it also requires 100% coverage
-of every changed line (`diff-cover`). The scanner and the gate configuration
-are **project-scoped** — they are not copied into `~/.claude` by
-`claude-install`.
+#### Termux
+
+Termux's Python is not glibc-based, so pip there can use only pure-Python
+wheels. ruff, ShellCheck and gitleaks therefore come from `pkg`, and the two
+remaining source builds (`msgpack`, `pyyaml`) fall back to pure Python, so no
+compiler or Rust toolchain is needed:
+
+```sh
+pkg install python git ruff shellcheck gitleaks
+./setup.sh toolchain       # installs requirements-gate.txt; reports any missing pkg tool
+./setup.sh gate-install
+./setup.sh scan
+```
+
+The scripts start with `#!/usr/bin/env bash`, which Termux resolves through
+`termux-exec` (installed by default). Without it, run them as
+`bash setup.sh scan`.
+
+On other platforms gitleaks is not on PyPI either: install it with the system
+package manager (`apt-get install gitleaks`, `brew install gitleaks`).
+
+The scanner and the gate configuration are **project-scoped** — they are not
+copied into `~/.claude` by `claude-install`.
 
 ---
 

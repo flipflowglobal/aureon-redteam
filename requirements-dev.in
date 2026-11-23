@@ -1,16 +1,12 @@
-# Development and gate toolchain. The production code (tools/zero_toy_scan.py,
-# .claude/hooks/policy_wrap.py) uses only the Python standard library.
+# Full gate toolchain for glibc and macOS hosts: the Python gate tools plus
+# ruff and ShellCheck. On Termux, ruff and ShellCheck come from `pkg` instead
+# (no Android wheels exist for them), and only requirements-gate.txt is
+# installed. ruff is pinned to the version Termux packages so both platforms
+# lint with the same rules.
 #
 # Regenerate the hash-pinned lockfile after editing this file:
 #   uv pip compile requirements-dev.in --universal --python-version 3.11 \
 #     --generate-hashes --output-file requirements-dev.txt
-ruff==0.16.9
-mypy==2.3.1
-pytest==9.1.1
-pytest-cov==7.1.0
-coverage==7.17.4
-diff-cover==11.0.4
-pip-audit==2.10.1
+-r requirements-gate.in
+ruff==0.17.6
 shellcheck-py==0.11.0.1
-actionlint-py==1.7.12.25
-yamllint==1.38.0

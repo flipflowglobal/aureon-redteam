@@ -38,7 +38,7 @@ each record capped at ``MAX_RECORD_BYTES``.
 
 from __future__ import annotations
 
-import datetime as _dt
+import datetime as dt
 import ipaddress
 import json
 import logging
@@ -398,9 +398,9 @@ def parse_engagement(text: str) -> Record:
 # --- authorization evaluation -------------------------------------------------
 
 
-def now_utc() -> _dt.datetime:
+def now_utc() -> dt.datetime:
     """Return the current UTC time; tests replace it to pin the clock."""
-    return _dt.datetime.now(_dt.timezone.utc)
+    return dt.datetime.now(dt.timezone.utc)
 
 
 def _mapping(value: YamlValue) -> Record:
@@ -408,11 +408,11 @@ def _mapping(value: YamlValue) -> Record:
     return value if isinstance(value, dict) else {}
 
 
-def _parse_timestamp(value: YamlValue) -> _dt.datetime | None:
+def _parse_timestamp(value: YamlValue) -> dt.datetime | None:
     if not isinstance(value, str):
         return None
     try:
-        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
     # A naive timestamp cannot be ordered against the UTC clock.
@@ -458,7 +458,7 @@ def _approval_failure(record: Record) -> str | None:
     return None
 
 
-def _window_failure(record: Record, now: _dt.datetime) -> str | None:
+def _window_failure(record: Record, now: dt.datetime) -> str | None:
     window = _mapping(record.get("time_window"))
     start = _parse_timestamp(window.get("valid_from"))
     end = _parse_timestamp(window.get("valid_until"))
@@ -481,7 +481,7 @@ def _network_failure(record: Record) -> str | None:
 def _authorization_failure(
     record: Record,
     targets: Sequence[str],
-    now: _dt.datetime,
+    now: dt.datetime,
 ) -> str | None:
     if str(record.get("status", "")).lower() != "active":
         return "record status is not 'active'"
@@ -506,7 +506,7 @@ def _rejected(source: str, reason: str) -> Engagement:
     return Engagement(source, "explicit", (), (), reason)
 
 
-def evaluate_record(source: str, record: Record, now: _dt.datetime) -> Engagement:
+def evaluate_record(source: str, record: Record, now: dt.datetime) -> Engagement:
     """Validate one parsed engagement record at time ``now``.
 
     Args:
@@ -531,7 +531,7 @@ def evaluate_record(source: str, record: Record, now: _dt.datetime) -> Engagemen
     )
 
 
-def load_engagement(path: Path, now: _dt.datetime) -> Engagement:
+def load_engagement(path: Path, now: dt.datetime) -> Engagement:
     """Load one record; any read, size, decode or parse failure rejects it."""
     try:
         raw = path.read_bytes()
@@ -548,7 +548,7 @@ def load_engagement(path: Path, now: _dt.datetime) -> Engagement:
     return evaluate_record(path.name, record, now)
 
 
-def load_engagements(project_dir: Path, now: _dt.datetime) -> list[Engagement]:
+def load_engagements(project_dir: Path, now: dt.datetime) -> list[Engagement]:
     """Load every engagement record under ``project_dir/engagements``.
 
     The template ``engagement.example.yaml`` is skipped: it authorizes nothing.
